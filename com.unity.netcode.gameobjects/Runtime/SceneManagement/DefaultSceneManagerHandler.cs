@@ -21,6 +21,7 @@ namespace Unity.Netcode
             public bool IsAssigned;
             public Scene Scene;
         }
+        public bool IsIntegrationTest() { return false; }
 
         internal Dictionary<string, Dictionary<int, SceneEntry>> SceneNameToSceneHandles = new Dictionary<string, Dictionary<int, SceneEntry>>();
 
@@ -361,8 +362,9 @@ namespace Unity.Netcode
         public void SetClientSynchronizationMode(ref NetworkManager networkManager, LoadSceneMode mode)
         {
             var sceneManager = networkManager.SceneManager;
-            // Don't let client's set this value
-            if (!networkManager.IsServer)
+            // In client-server, we don't let client's set this value.
+            // In distributed authority, since session owner can be promoted clients can set this value
+            if (!networkManager.DistributedAuthorityMode && !networkManager.IsServer)
             {
                 if (NetworkLog.CurrentLogLevel <= LogLevel.Normal)
                 {
@@ -371,7 +373,7 @@ namespace Unity.Netcode
                 return;
             }
             else // Warn users if they are changing this after there are clients already connected and synchronized
-            if (networkManager.ConnectedClientsIds.Count > (networkManager.IsHost ? 1 : 0) && sceneManager.ClientSynchronizationMode != mode)
+            if (!networkManager.DistributedAuthorityMode && networkManager.ConnectedClientsIds.Count > (networkManager.IsHost ? 1 : 0) && sceneManager.ClientSynchronizationMode != mode)
             {
                 if (NetworkLog.CurrentLogLevel <= LogLevel.Normal)
                 {

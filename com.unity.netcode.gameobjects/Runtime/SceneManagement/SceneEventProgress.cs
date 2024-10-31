@@ -58,6 +58,10 @@ namespace Unity.Netcode
         /// This is returned when a client attempts to perform a server only action
         /// </summary>
         ServerOnlyAction,
+        /// <summary>
+        /// This is returned when a client that is not the session owner attempts to perform a session owner only action
+        /// </summary>
+        SessionOwnerOnlyAction,
     }
 
     /// <summary>
@@ -160,22 +164,20 @@ namespace Unity.Netcode
             if (status == SceneEventProgressStatus.Started)
             {
                 m_NetworkManager = networkManager;
-
-                if (networkManager.IsServer)
+                WhenSceneEventHasTimedOut = networkManager.RealTimeProvider.RealTimeSinceStartup + networkManager.NetworkConfig.LoadSceneTimeOut;
+                if ((networkManager.IsServer && !networkManager.DistributedAuthorityMode) || (networkManager.DistributedAuthorityMode && networkManager.LocalClient.IsSessionOwner))
                 {
                     m_NetworkManager.OnClientDisconnectCallback += OnClientDisconnectCallback;
                     // Track the clients that were connected when we started this event
                     foreach (var connectedClientId in networkManager.ConnectedClientsIds)
                     {
-                        // Ignore the host client
-                        if (NetworkManager.ServerClientId == connectedClientId)
+                        // Ignore the host or session owner
+                        if ((!networkManager.DistributedAuthorityMode && NetworkManager.ServerClientId == connectedClientId) || (networkManager.DistributedAuthorityMode && networkManager.CurrentSessionOwner == connectedClientId))
                         {
                             continue;
                         }
                         ClientsProcessingSceneEvent.Add(connectedClientId, false);
                     }
-
-                    WhenSceneEventHasTimedOut = networkManager.RealTimeProvider.RealTimeSinceStartup + networkManager.NetworkConfig.LoadSceneTimeOut;
                     m_TimeOutCoroutine = m_NetworkManager.StartCoroutine(TimeOutSceneEventProgress());
                 }
             }
@@ -338,7 +340,7 @@ namespace Unity.Netcode
                     m_NetworkManager.OnClientDisconnectCallback -= OnClientDisconnectCallback;
                 }
 
-                if (m_TimeOutCoroutine != null)
+                if (m_TimeOutCoroutine != null && m_NetworkManager != null)
                 {
                     m_NetworkManager.StopCoroutine(m_TimeOutCoroutine);
                 }
