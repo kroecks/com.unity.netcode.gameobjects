@@ -9,6 +9,7 @@ using UnityEngine.Profiling;
 using UnityEngine.ResourceManagement.AsyncOperations;
 using UnityEngine.ResourceManagement.ResourceProviders;
 using UnityEngine.SceneManagement;
+using Object = UnityEngine.Object;
 
 
 namespace Unity.Netcode
@@ -472,6 +473,7 @@ namespace Unity.Netcode
         {
             if (!ServerSceneHandleToClientSceneHandle.ContainsKey(serverHandle))
             {
+                Log.Info(() => $"Adding Server Scene Handle {clientHandle} {localScene.name}");
                 ServerSceneHandleToClientSceneHandle.Add(serverHandle, clientHandle);
             }
             else if (!IsRestoringSession)
@@ -481,6 +483,7 @@ namespace Unity.Netcode
 
             if (!ClientSceneHandleToServerSceneHandle.ContainsKey(clientHandle))
             {
+                Log.Info(() => $"Adding Client Scene Handle {clientHandle} {localScene.name}");
                 ClientSceneHandleToServerSceneHandle.Add(clientHandle, serverHandle);
             }
             else if (!IsRestoringSession)
@@ -505,6 +508,7 @@ namespace Unity.Netcode
         {
             if (ServerSceneHandleToClientSceneHandle.ContainsKey(serverHandle))
             {
+                Log.Info(() => $"Remove ServerSceneHandleToClientSceneHandle {clientHandle} {serverHandle}");
                 ServerSceneHandleToClientSceneHandle.Remove(serverHandle);
             }
             else
@@ -514,6 +518,7 @@ namespace Unity.Netcode
 
             if (ClientSceneHandleToServerSceneHandle.ContainsKey(clientHandle))
             {
+                Log.Info(() => $"Remove ClientSceneHandleToServerSceneHandle {clientHandle} {serverHandle}");
                 ClientSceneHandleToServerSceneHandle.Remove(clientHandle);
             }
             else
@@ -523,6 +528,7 @@ namespace Unity.Netcode
 
             if (ScenesLoaded.ContainsKey(clientHandle))
             {
+                Log.Info(() => $"Remove ScenesLoaded {clientHandle} {serverHandle}");
                 ScenesLoaded.Remove(clientHandle);
             }
             else
@@ -1248,7 +1254,7 @@ namespace Unity.Netcode
             AsyncOperationHandle<SceneInstance> sceneUnload;
             if (ScenesLoaded[sceneHandle].SceneInstance.HasValue)
             {
-                sceneUnload = SceneManagerHandler.UnloadSceneAsync(ScenesLoaded[sceneHandle].SceneInstance.Value, sceneEventProgress);
+                sceneUnload = SceneManagerHandler.UnloadSceneAsync(ScenesLoaded[sceneHandle], sceneEventProgress);
             }
             else
             {
@@ -1318,7 +1324,7 @@ namespace Unity.Netcode
             AsyncOperationHandle<SceneInstance> sceneUnload;
             if (ScenesLoaded[sceneHandle].SceneInstance.HasValue)
             {
-                sceneUnload = SceneManagerHandler.UnloadSceneAsync(ScenesLoaded[sceneHandle].SceneInstance.Value, sceneEventProgress);
+                sceneUnload = SceneManagerHandler.UnloadSceneAsync(ScenesLoaded[sceneHandle], sceneEventProgress);
             }
             else
             {
@@ -1436,7 +1442,7 @@ namespace Unity.Netcode
             foreach (var keyHandleEntry in ScenesLoaded)
             {
                 // Validate the scene as well as ignore the DDOL (which will have a negative buildIndex)
-                if (currentActiveScene.name != keyHandleEntry.Value.SceneReference.name)
+                if (currentActiveScene.name != keyHandleEntry.Value.SceneReference.name && keyHandleEntry.Value.SceneReference != DontDestroyOnLoadScene)
                 {
                     var sceneEventProgress = new SceneEventProgress(NetworkManager)
                     {
@@ -1444,16 +1450,17 @@ namespace Unity.Netcode
                         OnSceneEventCompleted = EmptySceneUnloadedOperation
                     };
 
-                    if (ClientSceneHandleToServerSceneHandle.ContainsKey(keyHandleEntry.Value.SceneReference.handle))
+                    if (ClientSceneHandleToServerSceneHandle.TryGetValue(keyHandleEntry.Value.SceneReference.handle, out var serverSceneHandle))
                     {
-                        var serverSceneHandle = ClientSceneHandleToServerSceneHandle[keyHandleEntry.Value.SceneReference.handle];
                         ServerSceneHandleToClientSceneHandle.Remove(serverSceneHandle);
                     }
+                    Log.Info(() => $"Remove ClientSceneHandleToServerSceneHandle {keyHandleEntry.Value.SceneReference.handle}");
                     ClientSceneHandleToServerSceneHandle.Remove(keyHandleEntry.Value.SceneReference.handle);
 
-                    var sceneUnload = SceneManagerHandler.UnloadSceneAsync(keyHandleEntry.Value.SceneInstance.Value, sceneEventProgress);
+                    var sceneUnload = SceneManagerHandler.UnloadSceneAsync(keyHandleEntry.Value, sceneEventProgress);
 
                     SceneUnloadEventHandler.RegisterScene(this, keyHandleEntry.Value.SceneReference, LoadSceneMode.Additive, sceneUnload);
+
                 }
             }
             // clear out our scenes loaded list
@@ -2810,11 +2817,23 @@ namespace Unity.Netcode
                     // Only move dynamically spawned NetworkObjects with no parent as the children will follow
                     if (networkObject.gameObject.transform.parent == null && networkObject.IsSceneObject != null && !networkObject.IsSceneObject.Value)
                     {
-                        UnityEngine.Object.DontDestroyOnLoad(networkObject.gameObject);
-                        // When temporarily migrating to the DDOL, adjust the network and origin scene handles so no messages are generated
-                        // about objects being moved to a new scene.
-                        networkObject.NetworkSceneHandle = ClientSceneHandleToServerSceneHandle[networkObject.gameObject.scene.handle];
-                        networkObject.SceneOriginHandle = networkObject.gameObject.scene.handle;
+                        try
+                        {
+                            Object.DontDestroyOnLoad(networkObject.gameObject);
+                            // When temporarily migrating to the DDOL, adjust the network and origin scene handles so no messages are generated
+                            // about objects being moved to a new scene.
+                            networkObject.NetworkSceneHandle = ClientSceneHandleToServerSceneHandle[networkObject.gameObject.scene.handle];
+                            networkObject.SceneOriginHandle = networkObject.gameObject.scene.handle;
+                        }
+                        catch (Exception e)
+                        {
+                            string allEntities = "";
+                            foreach (var kvp in ClientSceneHandleToServerSceneHandle)
+                            {
+                                allEntities += $"{kvp.Key}={kvp.Value},";
+                            }
+                            Log.Error(() => $"Failed to move object={networkObject} to DDOL [{allEntities}] e={e}");
+                        }
                     }
                 }
                 else if (networkObject.HasAuthority)

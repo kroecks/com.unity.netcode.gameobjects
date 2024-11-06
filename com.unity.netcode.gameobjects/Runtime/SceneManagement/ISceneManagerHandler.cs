@@ -14,7 +14,7 @@ namespace Unity.Netcode
     {
         AsyncOperationHandle<SceneInstance> LoadSceneAsync(string sceneAssetKey, LoadSceneMode loadSceneMode, SceneEventProgress sceneEventProgress);
 
-        AsyncOperationHandle<SceneInstance> UnloadSceneAsync(SceneInstance scene, SceneEventProgress sceneEventProgress);
+        AsyncOperationHandle<SceneInstance> UnloadSceneAsync(NetworkSceneManager.SceneData scene, SceneEventProgress sceneEventProgress);
 
         void PopulateLoadedScenes(ref Dictionary<int, NetworkSceneManager.SceneData> scenesLoaded, NetworkManager networkManager = null);
         Scene GetSceneFromLoadedScenes(string sceneName, NetworkManager networkManager = null);

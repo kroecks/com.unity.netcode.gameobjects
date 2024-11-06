@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using TrollKing.Core;
 using UnityEngine;
 using UnityEngine.AddressableAssets;
 using UnityEngine.ResourceManagement.AsyncOperations;
@@ -14,6 +15,8 @@ namespace Unity.Netcode
     /// </summary>
     internal class DefaultSceneManagerHandler : ISceneManagerHandler
     {
+        private static NetworkLogScope s_Log = new NetworkLogScope(nameof(DefaultSceneManagerHandler));
+
         private Scene m_InvalidScene = new Scene();
 
         internal struct SceneEntry
@@ -27,6 +30,7 @@ namespace Unity.Netcode
 
         public AsyncOperationHandle<SceneInstance> LoadSceneAsync(string sceneName, LoadSceneMode loadSceneMode, SceneEventProgress sceneEventProgress)
         {
+            s_Log.Info(() => $"Loading scene '{sceneName}'...");
             AsyncOperationHandle<SceneInstance> operation = default;
             if (loadSceneMode == LoadSceneMode.Single)
             {
@@ -56,11 +60,23 @@ namespace Unity.Netcode
             return operation;
         }
 
-        public AsyncOperationHandle<SceneInstance> UnloadSceneAsync(SceneInstance scene, SceneEventProgress sceneEventProgress)
+        public AsyncOperationHandle<SceneInstance> UnloadSceneAsync(NetworkSceneManager.SceneData scene, SceneEventProgress sceneEventProgress)
         {
-            var operation = Addressables.UnloadSceneAsync(scene);
-            sceneEventProgress.SetAsyncOperation(operation);
-            return operation;
+            if (scene.SceneInstance.HasValue)
+            {
+                var operation = Addressables.UnloadSceneAsync(scene.SceneInstance.Value);
+                sceneEventProgress.SetAsyncOperation(operation);
+                return operation;
+            }
+            else
+            {
+                s_Log.Error(() => $"Unloaded a scene that wasn't loaded with addressables '{scene.SceneInstance}'");
+                var unloadOp = SceneManager.UnloadSceneAsync(scene.SceneReference);
+                AsyncOperationHandle<SceneInstance> operation = default;
+                sceneEventProgress.SetAsyncOperation(operation);
+                return operation;
+            }
+
         }
 
         /// <summary>

@@ -2,6 +2,7 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Threading.Tasks;
+using TrollKing.Core;
 using UnityEngine;
 using UnityEngine.ResourceManagement.AsyncOperations;
 using UnityEngine.ResourceManagement.ResourceProviders;
@@ -70,6 +71,8 @@ namespace Unity.Netcode
     /// </summary>
     public class SceneEventProgress
     {
+        private static NetworkLogScope Log = new NetworkLogScope(nameof(SceneEventProgress));
+
         /// <summary>
         /// List of clientIds of those clients that is done loading the scene.
         /// </summary>
@@ -279,6 +282,12 @@ namespace Unity.Netcode
         /// </summary>
         public void SetAsyncOperation(AsyncOperationHandle<SceneInstance> asyncOperation)
         {
+            if (!asyncOperation.IsValid())
+            {
+                Log.Error(() => $"Async Operation handle is invalid!");
+                return;
+            }
+
             // Debug.Log($"[SceneEventProgress] SetAsyncOperation ");
             m_AsyncOperation = asyncOperation;
             m_AsyncOperation.Completed += new Action<AsyncOperationHandle<SceneInstance>>(asyncOp2 =>

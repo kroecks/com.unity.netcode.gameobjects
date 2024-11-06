@@ -331,16 +331,16 @@ namespace Unity.Netcode.TestHelpers.Runtime
             return default;
         }
 
-        public AsyncOperationHandle<SceneInstance> UnloadSceneAsync(SceneInstance scene, SceneEventProgress sceneEventProgress)
+        public AsyncOperationHandle<SceneInstance> UnloadSceneAsync(NetworkSceneManager.SceneData scene, SceneEventProgress sceneEventProgress)
         {
             // Server and non NetcodeIntegrationTest tests use the generic unload scene method
             if (!NetcodeIntegrationTest.IsRunning)
             {
-                return GenericUnloadSceneAsync(scene, sceneEventProgress);
+                return GenericUnloadSceneAsync(scene.SceneInstance.Value, sceneEventProgress);
             }
             else // NetcodeIntegrationTest Clients always get added to the jobs queue
             {
-                AddJobToQueue(new QueuedSceneJob() { IntegrationTestSceneHandler = this, Scene = scene, SceneEventProgress = sceneEventProgress, JobType = QueuedSceneJob.JobTypes.Unloading });
+                AddJobToQueue(new QueuedSceneJob() { IntegrationTestSceneHandler = this, Scene = scene.SceneInstance.Value, SceneEventProgress = sceneEventProgress, JobType = QueuedSceneJob.JobTypes.Unloading });
             }
             // This is OK to return a "nothing" AsyncOperation since we are simulating client loading
             return default;
