@@ -385,7 +385,7 @@ namespace Unity.Netcode.TestHelpers.Runtime
                         {
                             continue;
                         }
-                        NetworkManager.SceneManager.ScenesLoaded.Add(sceneLoaded.handle, new NetworkSceneManager.SceneData(null, sceneLoaded));
+                        NetworkManager.SceneManager.ScenesLoaded.Add(sceneLoaded.handle, new NetworkSceneManager.SceneData(null, sceneLoaded, sceneLoaded.name));
                         StartTrackingScene(sceneLoaded, true, NetworkManager);
                         return sceneLoaded;
                     }
@@ -636,7 +636,7 @@ namespace Unity.Netcode.TestHelpers.Runtime
                     SceneNameToSceneHandles[networkManager][scene.name].Add(scene.handle, sceneEntry);
                     if (!scenesLoaded.ContainsKey(scene.handle))
                     {
-                        scenesLoaded.Add(scene.handle, new NetworkSceneManager.SceneData(null, scene));
+                        scenesLoaded.Add(scene.handle, new NetworkSceneManager.SceneData(null, scene, scene.name));
                     }
                 }
                 else
@@ -865,7 +865,7 @@ namespace Unity.Netcode.TestHelpers.Runtime
                     if (!sceneManager.ScenesLoaded.ContainsKey(scene.handle))
                     {
                         StartTrackingScene(scene, true, networkManager);
-                        sceneManager.ScenesLoaded.Add(scene.handle, new NetworkSceneManager.SceneData(null, scene));
+                        sceneManager.ScenesLoaded.Add(scene.handle, new NetworkSceneManager.SceneData(null, scene, scene.name));
                     }
                 }
             }

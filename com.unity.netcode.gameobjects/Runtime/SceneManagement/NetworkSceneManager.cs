@@ -423,13 +423,15 @@ namespace Unity.Netcode
 
         public class SceneData
         {
-            public SceneData(SceneInstance? instance, Scene reference)
+            public SceneData(SceneInstance? instance, Scene reference, string sceneName)
             {
                 SceneReference = reference;
                 SceneInstance = instance;
+                SceneName = sceneName;
             }
             public Scene SceneReference;
             public SceneInstance? SceneInstance;
+            public string SceneName;
         }
 
         /// <summary>
@@ -494,7 +496,7 @@ namespace Unity.Netcode
             // It is "Ok" if this already has an entry
             if (!ScenesLoaded.ContainsKey(clientHandle))
             {
-                ScenesLoaded.Add(clientHandle, new SceneData(null, localScene));
+                ScenesLoaded.Add(clientHandle, new SceneData(null, localScene, localScene.name));
             }
 
             return true;
@@ -731,7 +733,7 @@ namespace Unity.Netcode
                 for (int i = 0; i < SceneManager.sceneCount; i++)
                 {
                     var loadedScene = SceneManager.GetSceneAt(i);
-                    ScenesLoaded.Add(loadedScene.handle, new SceneData(null, loadedScene));
+                    ScenesLoaded.Add(loadedScene.handle, new SceneData(null, loadedScene, loadedScene.name));
                 }
                 SceneManagerHandler.PopulateLoadedScenes(ref ScenesLoaded, NetworkManager);
             }
@@ -858,7 +860,7 @@ namespace Unity.Netcode
                     {
                         if (!ScenesLoaded.ContainsKey(sceneLoaded.handle))
                         {
-                            ScenesLoaded.Add(sceneLoaded.handle, new SceneData(null, sceneLoaded));
+                            ScenesLoaded.Add(sceneLoaded.handle, new SceneData(null, sceneLoaded, sceneName));
                             SceneManagerHandler.StartTrackingScene(sceneLoaded, true, NetworkManager);
                             return sceneLoaded;
                         }
@@ -1444,11 +1446,13 @@ namespace Unity.Netcode
             var sceneEventData = SceneEventDataStore[sceneEventId];
             // Unload all additive scenes while making sure we don't try to unload the base scene ( loaded in single mode ).
             var currentActiveScene = SceneManager.GetActiveScene();
+            Log.Debug(() => $"UnloadAdditivelyLoadedScenes Active scene={currentActiveScene.name} sceneEventData={sceneEventData.ClientSceneName}");
             foreach (var keyHandleEntry in ScenesLoaded)
             {
                 // Validate the scene as well as ignore the DDOL (which will have a negative buildIndex)
-                if (currentActiveScene.name != keyHandleEntry.Value.SceneReference.name && keyHandleEntry.Value.SceneReference != DontDestroyOnLoadScene)
+                if (sceneEventData.ClientSceneName != keyHandleEntry.Value.SceneName && keyHandleEntry.Value.SceneReference != DontDestroyOnLoadScene)
                 {
+                    Log.Debug(() => $"Attempting to unload {keyHandleEntry.Value.SceneName}");
                     var sceneEventProgress = new SceneEventProgress(NetworkManager)
                     {
                         SceneEventId = sceneEventId,
@@ -1459,7 +1463,7 @@ namespace Unity.Netcode
                     {
                         ServerSceneHandleToClientSceneHandle.Remove(serverSceneHandle);
                     }
-                    Log.Debug(() => $"Remove ClientSceneHandleToServerSceneHandle {keyHandleEntry.Value.SceneReference.handle}");
+                    Log.Debug(() => $"LOADING Remove ClientSceneHandleToServerSceneHandle {keyHandleEntry} {keyHandleEntry.Key} {keyHandleEntry.Value} {keyHandleEntry.Value.SceneName} {keyHandleEntry.Value.SceneInstance} {keyHandleEntry.Value.SceneReference.handle}");
                     ClientSceneHandleToServerSceneHandle.Remove(keyHandleEntry.Value.SceneReference.handle);
 
                     var sceneUnload = SceneManagerHandler.UnloadSceneAsync(keyHandleEntry.Value, sceneEventProgress);
@@ -1519,6 +1523,7 @@ namespace Unity.Netcode
 
             if (sceneEventData.LoadSceneMode == LoadSceneMode.Single)
             {
+                Log.Debug(() => $"sceneEventData.LoadSceneMode == LoadSceneMode.Single={sceneName} ");
                 // Destroy current scene objects before switching.
                 NetworkManager.SpawnManager.ServerDestroySpawnedSceneObjects();
 

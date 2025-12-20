@@ -421,7 +421,7 @@ namespace Unity.Netcode.TestHelpers.Runtime
                 // with the clients.
                 if (!networkManager.SceneManager.ScenesLoaded.ContainsKey(scene.handle))
                 {
-                    networkManager.SceneManager.ScenesLoaded.Add(scene.handle, new NetworkSceneManager.SceneData(null, scene));
+                    networkManager.SceneManager.ScenesLoaded.Add(scene.handle, new NetworkSceneManager.SceneData(null, scene, scene.name));
                 }
                 // In distributed authority we need to check if this scene is already added
                 if (networkManager.DistributedAuthorityMode)

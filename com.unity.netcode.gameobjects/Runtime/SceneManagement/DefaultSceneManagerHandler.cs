@@ -234,7 +234,7 @@ namespace Unity.Netcode
                     SceneNameToSceneHandles[scene.name].Add(scene.handle, sceneEntry);
                     if (!scenesLoaded.ContainsKey(scene.handle))
                     {
-                        scenesLoaded.Add(scene.handle, new NetworkSceneManager.SceneData(null, scene));
+                        scenesLoaded.Add(scene.handle, new NetworkSceneManager.SceneData(null, scene, scene.name));
                     }
                 }
                 else
@@ -418,7 +418,7 @@ namespace Unity.Netcode
                     // If the scene is not already in the ScenesLoaded list, then add it
                     if (!sceneManager.ScenesLoaded.ContainsKey(scene.handle))
                     {
-                        sceneManager.ScenesLoaded.Add(scene.handle, new NetworkSceneManager.SceneData(null, scene));
+                        sceneManager.ScenesLoaded.Add(scene.handle, new NetworkSceneManager.SceneData(null, scene, scene.name));
                     }
                 }
             }
