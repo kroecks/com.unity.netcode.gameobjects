@@ -496,6 +496,7 @@ namespace Unity.Netcode
             // It is "Ok" if this already has an entry
             if (!ScenesLoaded.ContainsKey(clientHandle))
             {
+				Log.Info(() => $"[SCENE_LOAD] ]UpdateServiceClientSceneHandle - Adding client scene {localScene.name}");
                 ScenesLoaded.Add(clientHandle, new SceneData(null, localScene, localScene.name));
             }
 
@@ -733,6 +734,7 @@ namespace Unity.Netcode
                 for (int i = 0; i < SceneManager.sceneCount; i++)
                 {
                     var loadedScene = SceneManager.GetSceneAt(i);
+					Log.Info(() => $"[SCENE_LOAD] Initializaing NetworkSceneManager - Adding Loaded scene to list: {loadedScene.name}");
                     ScenesLoaded.Add(loadedScene.handle, new SceneData(null, loadedScene, loadedScene.name));
                 }
                 SceneManagerHandler.PopulateLoadedScenes(ref ScenesLoaded, NetworkManager);
@@ -860,6 +862,7 @@ namespace Unity.Netcode
                     {
                         if (!ScenesLoaded.ContainsKey(sceneLoaded.handle))
                         {
+							Log.Info(() => $"[SCENE_LOAD] GetAndAddNewlyLoadedSceneByName - Adding Loaded scene to list: {loadedScene.name}");
                             ScenesLoaded.Add(sceneLoaded.handle, new SceneData(null, sceneLoaded, sceneName));
                             SceneManagerHandler.StartTrackingScene(sceneLoaded, true, NetworkManager);
                             return sceneLoaded;

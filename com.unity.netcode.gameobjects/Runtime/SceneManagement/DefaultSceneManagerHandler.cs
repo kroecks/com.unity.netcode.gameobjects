@@ -418,6 +418,7 @@ namespace Unity.Netcode
                     // If the scene is not already in the ScenesLoaded list, then add it
                     if (!sceneManager.ScenesLoaded.ContainsKey(scene.handle))
                     {
+                        s_Log.Info(() => $"[SCENE_LOAD] SetClientSynchronizationMode - Adding Loaded scene to list: {loadedScene.name}");
                         sceneManager.ScenesLoaded.Add(scene.handle, new NetworkSceneManager.SceneData(null, scene, scene.name));
                     }
                 }
