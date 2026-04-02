@@ -17,6 +17,7 @@ namespace TrollKing.Core
     public class NetworkLogScope
     {
         private readonly string m_LoggerName;
+        private readonly string m_LoggerCategory;
         private readonly NetworkLoggingLevel m_Level = NetworkLoggingLevel.Info;
 
         public NetworkLogScope(string logName, NetworkLoggingLevel logLevel = NetworkLoggingLevel.Info)
@@ -24,6 +25,13 @@ namespace TrollKing.Core
             m_LoggerName = logName;
             m_Level = logLevel;
         }
+
+        public NetworkLogScope(string logName, string logCategory, NetworkLoggingLevel logLevel = NetworkLoggingLevel.Info)
+            : this(logName, logLevel)
+        {
+            m_LoggerCategory  = logCategory;
+        }
+
 
         public NetworkLoggingLevel GetLevel()
         {
@@ -38,22 +46,26 @@ namespace TrollKing.Core
                 DateTime time = DateTime.Now;
                 var shortTime = time.ToString("T");
 
+                string finalString = m_LoggerCategory != null
+                    ? $"[{shortTime}][{logLevel}][{m_LoggerCategory}][{m_LoggerName}] {logString}"
+                    : $"[{shortTime}][{logLevel}][{m_LoggerName}] {logString}";
+
                 switch (logLevel)
                 {
                     case NetworkLoggingLevel.Debug:
-                        UnityEngine.Debug.Log($"[{shortTime}][DEBUG][{m_LoggerName}] {logString}");
+                        UnityEngine.Debug.Log(finalString);
                         break;
                     case NetworkLoggingLevel.Info:
-                        UnityEngine.Debug.Log($"[{shortTime}][INFO][{m_LoggerName}] {logString}");
+                        UnityEngine.Debug.Log(finalString);
                         break;
                     case NetworkLoggingLevel.Warn:
-                        UnityEngine.Debug.LogWarning($"[{shortTime}][WARN][{m_LoggerName}] {logString}");
+                        UnityEngine.Debug.LogWarning(finalString);
                         break;
                     case NetworkLoggingLevel.Error:
-                        UnityEngine.Debug.LogError($"[{shortTime}][ERROR][{m_LoggerName}] {logString}");
+                        UnityEngine.Debug.LogError(finalString);
                         break;
                     case NetworkLoggingLevel.Exception:
-                        UnityEngine.Debug.LogError($"[{shortTime}][EXCEPTION][{m_LoggerName}] {logString}");
+                        UnityEngine.Debug.LogError(finalString);
                         break;
                     default:
                         throw new ArgumentOutOfRangeException(nameof(logLevel), logLevel, null);

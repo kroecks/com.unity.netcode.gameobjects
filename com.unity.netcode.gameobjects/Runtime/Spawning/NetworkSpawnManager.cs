@@ -5,6 +5,7 @@ using System.Linq;
 using System.Text;
 using UnityEngine;
 using TrollKing.Core;
+using UnityEngine.SceneManagement;
 
 namespace Unity.Netcode
 {
@@ -13,7 +14,7 @@ namespace Unity.Netcode
     /// </summary>
     public class NetworkSpawnManager
     {
-        private static readonly NetworkLogScope Log = new NetworkLogScope(nameof(NetworkSpawnManager));
+        private static readonly NetworkLogScope Log = new NetworkLogScope(nameof(NetworkSpawnManager), "SceneLoad", NetworkLoggingLevel.Debug);
         // Stores the objects that need to be shown at end-of-frame
         internal Dictionary<ulong, List<NetworkObject>> ObjectsToShowToClient = new Dictionary<ulong, List<NetworkObject>>();
 
@@ -827,14 +828,15 @@ namespace Unity.Netcode
                             }
                     }
                 }
+                else
+                {
+                    Log.Warning(() => $"NetworkPrefab has={globalObjectIdHash} not included in any prefab list!");
+                }
 
                 // If not, then there is an issue (user possibly didn't register the prefab properly?)
                 if (networkPrefabReference == null)
                 {
-                    if (NetworkLog.CurrentLogLevel <= LogLevel.Error)
-                    {
-                        NetworkLog.LogError($"Failed to create object locally. [{nameof(globalObjectIdHash)}={globalObjectIdHash}]. {nameof(NetworkPrefab)} could not be found. Is the prefab registered with {nameof(NetworkManager)}?");
-                    }
+                    Log.Error(() => $"Failed to create object locally. [{nameof(globalObjectIdHash)}={globalObjectIdHash}]. {nameof(NetworkPrefab)} could not be found. Is the prefab registered with {nameof(NetworkManager)}?");
                 }
                 else
                 {
@@ -897,6 +899,17 @@ namespace Unity.Netcode
                 networkObject = NetworkManager.SceneManager.GetSceneRelativeInSceneNetworkObject(globalObjectIdHash, sceneObject.NetworkSceneHandle);
                 if (networkObject == null)
                 {
+                    Log.Error(() =>
+                    {
+                        string networkGetScenePath = $"{sceneObject.OwnerObject}";
+                        if (sceneObject.OwnerObject && sceneObject.OwnerObject.gameObject)
+                        {
+                            var sceneObjectOwnerObject = sceneObject.OwnerObject;
+                            networkGetScenePath = sceneObjectOwnerObject.gameObject.NetworkGetScenePath();
+                        }
+
+                        return $"NetworkPrefab Hash ={globalObjectIdHash} not found - ActiveScene:{SceneManager.GetActiveScene().name} sceneObject={networkGetScenePath}";
+                    });
                     if (NetworkLog.CurrentLogLevel <= LogLevel.Error)
                     {
                         NetworkLog.LogError($"{nameof(NetworkPrefab)} hash was not found! In-Scene placed {nameof(NetworkObject)} soft synchronization failure for Hash: {globalObjectIdHash}!");

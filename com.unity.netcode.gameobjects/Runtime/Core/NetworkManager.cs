@@ -1218,6 +1218,11 @@ namespace Unity.Netcode
             Client
         }
 
+        public virtual ISceneManagerHandler GetSceneManagerHandler()
+        {
+            return new DefaultSceneManagerHandler();
+        }
+
         /// <summary>
         /// Determines if NetworkManager can start based on the current
         /// NetworkManager instance state(s)

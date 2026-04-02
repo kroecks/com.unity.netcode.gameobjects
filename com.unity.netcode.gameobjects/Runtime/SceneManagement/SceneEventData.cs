@@ -1,3 +1,4 @@
+using TrollKing.Core;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -101,6 +102,7 @@ namespace Unity.Netcode
     /// </summary>
     internal class SceneEventData : IDisposable
     {
+        private static NetworkLogScope Log = new NetworkLogScope(nameof(SceneEventData), "SceneLoad", NetworkLoggingLevel.Debug);
         internal SceneEventType SceneEventType;
         internal LoadSceneMode LoadSceneMode;
         internal ForceNetworkSerializeByMemcpy<Guid> SceneEventProgressId;
@@ -751,6 +753,7 @@ namespace Unity.Netcode
             if (SceneEventType == SceneEventType.ActiveSceneChanged)
             {
                 reader.ReadValueSafe(out ActiveSceneAsset);
+                Log.Debug(() => $"ActiveSceneChanged NetworkSceneEvent ActiveSceneAsset={ActiveSceneAsset}");
                 return;
             }
 
@@ -788,6 +791,7 @@ namespace Unity.Netcode
                 case SceneEventType.Synchronize:
                     {
                         reader.ReadValueSafe(out ActiveSceneAsset);
+                        Log.Debug(() => $"Synchronize NetworkSceneEvent ActiveSceneAsset={ActiveSceneAsset}");
                         if (EnableSerializationLogs)
                         {
                             LogArray(reader.ToArray(), 0, reader.Length);

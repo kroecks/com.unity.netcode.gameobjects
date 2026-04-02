@@ -134,7 +134,7 @@ namespace Unity.Netcode.TestHelpers.Runtime
             {
                 var handler = new IntegrationTestSceneHandler(networkManager);
                 ClientSceneHandlers.Add(handler);
-                networkManager.SceneManager.SceneManagerHandler = handler;
+                // networkManager.SceneManager.SceneManagerHandler = handler;
             }
         }
 

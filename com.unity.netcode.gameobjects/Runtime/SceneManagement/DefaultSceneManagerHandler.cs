@@ -213,7 +213,7 @@ namespace Unity.Netcode
         /// </summary>
         public void PopulateLoadedScenes(ref Dictionary<int, NetworkSceneManager.SceneData> scenesLoaded, NetworkManager networkManager)
         {
-            Debug.LogError($"PopulateLoadedScenes START");
+            s_Log.Error(() => $"PopulateLoadedScenes START");
             SceneNameToSceneHandles.Clear();
             var sceneCount = SceneManager.sceneCount;
             for (int i = 0; i < sceneCount; i++)
@@ -242,7 +242,7 @@ namespace Unity.Netcode
                     throw new Exception($"[Duplicate Handle] Scene {scene.name} already has scene handle {scene.handle} registered!");
                 }
             }
-            Debug.LogError($"PopulateLoadedScenes END");
+            s_Log.Error(() => $"PopulateLoadedScenes END");
         }
 
         private List<Scene> m_ScenesToUnload = new List<Scene>();
@@ -418,8 +418,9 @@ namespace Unity.Netcode
                     // If the scene is not already in the ScenesLoaded list, then add it
                     if (!sceneManager.ScenesLoaded.ContainsKey(scene.handle))
                     {
-                        s_Log.Info(() => $"[SCENE_LOAD] SetClientSynchronizationMode - Adding Loaded scene to list: {loadedScene.name}");
+                        s_Log.Info(() => $"[SCENE_LOAD] SetClientSynchronizationMode - Adding Loaded scene to list: {scene.name}");
                         sceneManager.ScenesLoaded.Add(scene.handle, new NetworkSceneManager.SceneData(null, scene, scene.name));
+                        throw new NotImplementedException();
                     }
                 }
             }

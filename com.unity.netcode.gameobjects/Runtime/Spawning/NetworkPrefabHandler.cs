@@ -90,6 +90,8 @@ namespace Unity.Netcode
             return AddHandler(prefabAssetNetworkObject.GlobalObjectIdHash, instanceHandler);
         }
 
+        public Dictionary<uint, INetworkPrefabInstanceHandler> PrefabAssetToPrefabHandler => m_PrefabAssetToPrefabHandler;
+
         /// <summary>
         /// Use a <see cref="NetworkObject.GlobalObjectIdHash"/> to register a class that implements the <see cref="INetworkPrefabInstanceHandler"/> interface with the <see cref="NetworkPrefabHandler"/>
         /// </summary>
