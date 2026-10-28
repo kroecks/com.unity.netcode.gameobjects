@@ -105,10 +105,10 @@ namespace Unity.Netcode.RuntimeTests
 
     internal class CustomGenericSerializationTestBehaviour : NetworkBehaviour
     {
-        public CustomSerializableClass<TypeReferencedOnlyInCustomSerialization1, TypeReferencedOnlyInCustomSerialization2> Value1;
-        public CustomSerializableClass<NativeArray<TypeReferencedOnlyInCustomSerialization1>, NativeArray<TypeReferencedOnlyInCustomSerialization2>> Value2;
-        public CustomSerializableSubclass<TypeReferencedOnlyInCustomSerialization4> Value3;
-        public CustomSerializableSubclassWithNativeArray<NativeArray<TypeReferencedOnlyInCustomSerialization4>> Value4;
+        internal CustomSerializableClass<TypeReferencedOnlyInCustomSerialization1, TypeReferencedOnlyInCustomSerialization2> Value1;
+        internal CustomSerializableClass<NativeArray<TypeReferencedOnlyInCustomSerialization1>, NativeArray<TypeReferencedOnlyInCustomSerialization2>> Value2;
+        internal CustomSerializableSubclass<TypeReferencedOnlyInCustomSerialization4> Value3;
+        internal CustomSerializableSubclassWithNativeArray<NativeArray<TypeReferencedOnlyInCustomSerialization4>> Value4;
     }
 
     [GenerateSerializationForType(typeof(TypeReferencedOnlyInCustomSerialization5))]
@@ -129,49 +129,49 @@ namespace Unity.Netcode.RuntimeTests
         public T Value;
     }
 
-    public enum ByteEnum : byte
+    internal enum ByteEnum : byte
     {
         A,
         B,
         C = byte.MaxValue
     }
-    public enum SByteEnum : sbyte
+    internal enum SByteEnum : sbyte
     {
         A,
         B,
         C = sbyte.MaxValue
     }
-    public enum ShortEnum : short
+    internal enum ShortEnum : short
     {
         A,
         B,
         C = short.MaxValue
     }
-    public enum UShortEnum : ushort
+    internal enum UShortEnum : ushort
     {
         A,
         B,
         C = ushort.MaxValue
     }
-    public enum IntEnum : int
+    internal enum IntEnum : int
     {
         A,
         B,
         C = int.MaxValue
     }
-    public enum UIntEnum : uint
+    internal enum UIntEnum : uint
     {
         A,
         B,
         C = uint.MaxValue
     }
-    public enum LongEnum : long
+    internal enum LongEnum : long
     {
         A,
         B,
         C = long.MaxValue
     }
-    public enum ULongEnum : ulong
+    internal enum ULongEnum : ulong
     {
         A,
         B,
@@ -187,14 +187,13 @@ namespace Unity.Netcode.RuntimeTests
         public uint E;
         public long F;
         public ulong G;
-        public bool H;
-        public char I;
-        public float J;
-        public double K;
+        public char H;
+        public float I;
+        public double J;
 
         public bool Equals(HashableNetworkVariableTestStruct other)
         {
-            return A == other.A && B == other.B && C == other.C && D == other.D && E == other.E && F == other.F && G == other.G && H == other.H && I == other.I && J.Equals(other.J) && K.Equals(other.K);
+            return A == other.A && B == other.B && C == other.C && D == other.D && E == other.E && F == other.F && G == other.G && H == other.H && I.Equals(other.I) && J.Equals(other.J);
         }
 
         public override bool Equals(object obj)
@@ -215,7 +214,6 @@ namespace Unity.Netcode.RuntimeTests
             hashCode.Add(H);
             hashCode.Add(I);
             hashCode.Add(J);
-            hashCode.Add(K);
             return hashCode.ToHashCode();
         }
     }
@@ -229,14 +227,18 @@ namespace Unity.Netcode.RuntimeTests
         public uint E;
         public long F;
         public ulong G;
-        public bool H;
-        public char I;
-        public float J;
-        public double K;
+        public char H;
+        public float I;
+        public double J;
 
         public bool Equals(HashMapKeyStruct other)
         {
-            return A == other.A && B == other.B && C == other.C && D == other.D && E == other.E && F == other.F && G == other.G && H == other.H && I == other.I && J.Equals(other.J) && K.Equals(other.K);
+            return A == other.A && B == other.B && C == other.C && D == other.D && E == other.E && F == other.F && G == other.G && H == other.H && I.Equals(other.I) && J.Equals(other.J);
+        }
+
+        public override string ToString()
+        {
+            return $"{{A: {A}, B: {B}, C:{C}, D:{D}, E:{E}, F:{F}, G:{G}, H:{H}, I:{I}, J:{J}}}";
         }
 
         public override bool Equals(object obj)
@@ -257,7 +259,6 @@ namespace Unity.Netcode.RuntimeTests
             hashCode.Add(H);
             hashCode.Add(I);
             hashCode.Add(J);
-            hashCode.Add(K);
             return hashCode.ToHashCode();
         }
     }
@@ -271,14 +272,18 @@ namespace Unity.Netcode.RuntimeTests
         public uint E;
         public long F;
         public ulong G;
-        public bool H;
-        public char I;
-        public float J;
-        public double K;
+        public char H;
+        public float I;
+        public double J;
 
         public bool Equals(HashMapValStruct other)
         {
-            return A == other.A && B == other.B && C == other.C && D == other.D && E == other.E && F == other.F && G == other.G && H == other.H && I == other.I && J.Equals(other.J) && K.Equals(other.K);
+            return A == other.A && B == other.B && C == other.C && D == other.D && E == other.E && F == other.F && G == other.G && H == other.H && I.Equals(other.I) && J.Equals(other.J);
+        }
+
+        public override string ToString()
+        {
+            return $"{{A: {A}, B: {B}, C:{C}, D:{D}, E:{E}, F:{F}, G:{G}, H:{H}, I:{I}, J:{J}}}";
         }
 
         public override bool Equals(object obj)
@@ -299,7 +304,6 @@ namespace Unity.Netcode.RuntimeTests
             hashCode.Add(H);
             hashCode.Add(I);
             hashCode.Add(J);
-            hashCode.Add(K);
             return hashCode.ToHashCode();
         }
     }
@@ -381,6 +385,11 @@ namespace Unity.Netcode.RuntimeTests
             return obj is HashMapKeyClass other && Equals(other);
         }
 
+        public override string ToString()
+        {
+            return Data.ToString();
+        }
+
         public override int GetHashCode()
         {
             return Data.GetHashCode();
@@ -399,6 +408,11 @@ namespace Unity.Netcode.RuntimeTests
         public bool Equals(HashMapValClass other)
         {
             return Data.Equals(other.Data);
+        }
+
+        public override string ToString()
+        {
+            return Data.ToString();
         }
 
         public override bool Equals(object obj)
@@ -802,6 +816,23 @@ namespace Unity.Netcode.RuntimeTests
         public NetworkVariable<Dictionary<Vector2, Quaternion>> Vector2QuaternionDictionaryVar;
         public NetworkVariable<Dictionary<HashMapKeyClass, Quaternion>> HashMapKeyClassQuaternionDictionaryVar;
 
+        public NetworkVariable<Pose> PoseVar;
+        public NetworkVariable<NativeArray<Pose>> PoseArrayVar;
+        public NetworkVariable<List<Pose>> PoseManagedListVar;
+        public NetworkVariable<HashSet<Pose>> PoseManagedHashSetVar;
+#if UNITY_NETCODE_NATIVE_COLLECTION_SUPPORT
+        public NetworkVariable<NativeList<Pose>> PoseListVar;
+        public NetworkVariable<NativeHashSet<Pose>> PoseHashSetVar;
+        public NetworkVariable<NativeHashMap<byte, Pose>> BytePoseHashMapVar;
+        public NetworkVariable<NativeHashMap<ulong, Pose>> ULongPoseHashMapVar;
+        public NetworkVariable<NativeHashMap<Vector2, Pose>> Vector2PoseHashMapVar;
+        public NetworkVariable<NativeHashMap<HashMapKeyStruct, Pose>> HashMapKeyStructPoseHashMapVar;
+#endif
+        public NetworkVariable<Dictionary<byte, Pose>> BytePoseDictionaryVar;
+        public NetworkVariable<Dictionary<ulong, Pose>> ULongPoseDictionaryVar;
+        public NetworkVariable<Dictionary<Vector2, Pose>> Vector2PoseDictionaryVar;
+        public NetworkVariable<Dictionary<HashMapKeyClass, Pose>> HashMapKeyClassPoseDictionaryVar;
+
         public NetworkVariable<Color> ColorVar;
         public NetworkVariable<NativeArray<Color>> ColorArrayVar;
         public NetworkVariable<List<Color>> ColorManagedListVar;
@@ -884,17 +915,17 @@ namespace Unity.Netcode.RuntimeTests
 
         public NetworkVariable<string> StringVar;
         public NetworkVariable<Guid> GuidVar;
-        public NetworkVariableSubclass<TemplatedValueOnlyReferencedByNetworkVariableSubclass<int>> SubclassVar;
+        internal NetworkVariableSubclass<TemplatedValueOnlyReferencedByNetworkVariableSubclass<int>> SubclassVar;
     }
 
     internal class TemplateNetworkBehaviourType<T> : NetworkBehaviour
     {
-        public NetworkVariable<T> TheVar;
+        public NetworkVariable<T> TheVar = new NetworkVariable<T>();
     }
 
     internal class IntermediateNetworkBehavior<T> : TemplateNetworkBehaviourType<T>
     {
-        public NetworkVariable<T> TheVar2;
+        public NetworkVariable<T> TheVar2 = new NetworkVariable<T>();
     }
 #if !NGO_MINIMALPROJECT
     internal class ClassHavingNetworkBehaviour : IntermediateNetworkBehavior<TestClass>

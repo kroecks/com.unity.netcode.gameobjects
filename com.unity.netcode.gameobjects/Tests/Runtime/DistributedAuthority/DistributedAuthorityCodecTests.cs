@@ -14,6 +14,12 @@ using UnityEngine.TestTools;
 
 namespace Unity.Netcode.RuntimeTests
 {
+    internal enum NetworkConfigOptions
+    {
+        EnsureVariableLengthSafety,
+        Default,
+    }
+
     /// <summary>
     /// This class tests the NGO message codec between the C# SDK and the Rust runtime.
     /// </summary>
@@ -28,9 +34,11 @@ namespace Unity.Netcode.RuntimeTests
     /// The default behaviour when unity fails to connect to the echo-server is to ignore all tests in this class.
     /// This can be overridden by setting the environment variable "ENSURE_CODEC_TESTS" to any value - then the tests will fail.
     /// </remarks>
+    [TestFixture(NetworkConfigOptions.EnsureVariableLengthSafety)]
+    [TestFixture(NetworkConfigOptions.Default)]
     internal class DistributedAuthorityCodecTests : NetcodeIntegrationTest
     {
-        protected override int NumberOfClients => 1;
+        protected override int NumberOfClients => 0;
 
         // Use the CMB Service for all tests
         protected override bool UseCMBService() => true;
@@ -39,11 +47,18 @@ namespace Unity.Netcode.RuntimeTests
         protected override NetworkTopologyTypes OnGetNetworkTopologyType() => NetworkTopologyTypes.DistributedAuthority;
 
         private CodecTestHooks m_ClientCodecHook;
-        private NetworkManager Client => m_ClientNetworkManagers[0];
+        private NetworkManager m_Client;
 
         private string m_TransportHost = Environment.GetEnvironmentVariable("NGO_HOST") ?? "127.0.0.1";
         private static readonly ushort k_TransportPort = GetPortToBind();
         private const int k_ClientId = 0;
+
+        private bool m_EnsureVariableLengthSafety;
+
+        public DistributedAuthorityCodecTests(NetworkConfigOptions configOptions) : base()
+        {
+            m_EnsureVariableLengthSafety = configOptions == NetworkConfigOptions.EnsureVariableLengthSafety;
+        }
 
         /// <summary>
         /// Configures the port to look for the rust echo-server.
@@ -61,11 +76,6 @@ namespace Unity.Netcode.RuntimeTests
         {
             public NetworkList<int> MyNetworkList = new NetworkList<int>(new List<int> { 1, 2, 3 });
             public NetworkVariable<int> MyNetworkVar = new NetworkVariable<int>(3);
-
-            [Rpc(SendTo.Authority)]
-            public void TestAuthorityRpc(byte[] _)
-            {
-            }
         }
 
         protected override void OnOneTimeSetup()
@@ -100,103 +110,52 @@ namespace Unity.Netcode.RuntimeTests
         /// </summary>
         protected override void OnServerAndClientsCreated()
         {
-            var utpTransport = Client.gameObject.AddComponent<UnityTransport>();
-            Client.NetworkConfig.NetworkTransport = utpTransport;
-            Client.NetworkConfig.EnableSceneManagement = false;
-            Client.NetworkConfig.AutoSpawnPlayerPrefabClientSide = true;
+            m_Client = GetAuthorityNetworkManager();
+
+            var utpTransport = m_Client.gameObject.AddComponent<UnityTransport>();
+            m_Client.NetworkConfig.NetworkTransport = utpTransport;
+            m_Client.NetworkConfig.EnableSceneManagement = false;
+            m_Client.NetworkConfig.AutoSpawnPlayerPrefabClientSide = true;
+            m_Client.NetworkConfig.EnsureNetworkVariableLengthSafety = m_EnsureVariableLengthSafety;
             utpTransport.ConnectionData.Address = Dns.GetHostAddresses(m_TransportHost).First().ToString();
             utpTransport.ConnectionData.Port = k_TransportPort;
-            Client.LogLevel = LogLevel.Developer;
+
+            if (m_EnableVerboseDebug)
+            {
+                m_Client.LogLevel = LogLevel.Developer;
+            }
 
             // Validate we are in distributed authority mode with client side spawning and using CMB Service
-            Assert.True(Client.NetworkConfig.NetworkTopology == NetworkTopologyTypes.DistributedAuthority, "Distributed authority topology is not set!");
-            Assert.True(Client.AutoSpawnPlayerPrefabClientSide, "Client side spawning is not set!");
-            Assert.True(Client.CMBServiceConnection, "CMBServiceConnection is not set!");
+            Assert.True(m_Client.NetworkConfig.NetworkTopology == NetworkTopologyTypes.DistributedAuthority, "Distributed authority topology is not set!");
+            Assert.True(m_Client.AutoSpawnPlayerPrefabClientSide, "Client side spawning is not set!");
+            Assert.True(m_Client.CMBServiceConnection, "CMBServiceConnection is not set!");
 
             // Create a prefab for creating and destroying tests (auto-registers with NetworkManagers)
             m_SpawnObject = CreateNetworkObjectPrefab("TestObject");
             m_SpawnObject.AddComponent<TestNetworkComponent>();
-
-            // Ignore the client connection timeout after starting the client
-            m_BypassConnectionTimeout = true;
         }
 
         protected override IEnumerator OnStartedServerAndClients()
         {
             // Validate the NetworkManager are in distributed authority mode
-            Assert.True(Client.DistributedAuthorityMode, "Distributed authority is not set!");
+            Assert.True(m_Client.DistributedAuthorityMode, "Distributed authority is not set!");
 
-            // Register hooks after starting clients and server (in this case just the one client)
-            // We do this at this point in time because the MessageManager exists (happens within the same call stack when starting NetworkManagers)
-            m_ClientCodecHook = new CodecTestHooks();
-            Client.MessageManager.Hook(m_ClientCodecHook);
             yield return base.OnStartedServerAndClients();
 
             // wait for client to connect since m_BypassConnectionTimeout
-            yield return WaitForConditionOrTimeOut(() => Client.LocalClient.PlayerObject != null);
+            yield return WaitForConditionOrTimeOut(() => m_Client.LocalClient.PlayerObject != null);
             AssertOnTimeout($"Timed out waiting for the client's player to be spanwed!");
-        }
 
-        [UnityTest]
-        public IEnumerator AuthorityRpc()
-        {
-            var player = Client.LocalClient.PlayerObject;
-            player.OwnerClientId = Client.LocalClientId + 1;
-
-            var networkComponent = player.GetComponent<TestNetworkComponent>();
-            networkComponent.UpdateNetworkProperties();
-            networkComponent.TestAuthorityRpc(new byte[] { 1, 2, 3, 4 });
-
-            // Universal Rpcs are sent as a ProxyMessage (which contains an RpcMessage)
-            yield return m_ClientCodecHook.WaitForMessageReceived<ProxyMessage>();
-        }
-
-        [UnityTest]
-        public IEnumerator ChangeOwnership()
-        {
-            var message = new ChangeOwnershipMessage
-            {
-                DistributedAuthorityMode = true,
-                NetworkObjectId = 100,
-                OwnerClientId = 2,
-            };
-
-            yield return SendMessage(ref message);
-        }
-
-        [UnityTest]
-        public IEnumerator ClientConnected()
-        {
-            var message = new ClientConnectedMessage()
-            {
-                ClientId = 2,
-            };
-
-            yield return SendMessage(ref message);
-        }
-
-        [UnityTest]
-        public IEnumerator ClientDisconnected()
-        {
-            var message = new ClientDisconnectedMessage()
-            {
-                ClientId = 2,
-            };
-
-            yield return SendMessage(ref message);
-        }
-
-        [UnityTest]
-        public IEnumerator CreateObject()
-        {
-            SpawnObject(m_SpawnObject, Client);
-            yield return m_ClientCodecHook.WaitForMessageReceived<CreateObjectMessage>();
+            // Register hooks after starting clients and server (in this case just the one client)
+            // We do this at this after all the setup has finished in order to ensure our hooks are only catching messages from the tests
+            m_ClientCodecHook = new CodecTestHooks();
+            m_Client.MessageManager.Hook(m_ClientCodecHook);
         }
 
         [UnityTest]
         public IEnumerator DestroyObject()
         {
-            var spawnedObject = SpawnObject(m_SpawnObject, Client);
+            var spawnedObject = SpawnObject(m_SpawnObject, m_Client);
             yield return m_ClientCodecHook.WaitForMessageReceived<CreateObjectMessage>();
             spawnedObject.GetComponent<NetworkObject>().Despawn();
             yield return m_ClientCodecHook.WaitForMessageReceived<DestroyObjectMessage>();
@@ -231,10 +190,10 @@ namespace Unity.Netcode.RuntimeTests
         [UnityTest]
         public IEnumerator NetworkVariableDelta()
         {
-            var component = Client.LocalClient.PlayerObject.GetComponent<TestNetworkComponent>();
+            var component = m_Client.LocalClient.PlayerObject.GetComponent<TestNetworkComponent>();
             var message = new NetworkVariableDeltaMessage
             {
-                NetworkObjectId = Client.LocalClient.PlayerObject.NetworkObjectId,
+                NetworkObjectId = m_Client.LocalClient.PlayerObject.NetworkObjectId,
                 NetworkBehaviourIndex = component.NetworkBehaviourId,
                 DeliveryMappedNetworkVariableIndex = new HashSet<int> { 0, 1 },
                 TargetClientId = 5,
@@ -247,9 +206,7 @@ namespace Unity.Netcode.RuntimeTests
         [UnityTest]
         public IEnumerator NetworkVariableDelta_WithValueUpdate()
         {
-            var networkObj = CreateNetworkObjectPrefab("TestObject");
-            networkObj.AddComponent<TestNetworkComponent>();
-            var instance = SpawnObject(networkObj, Client);
+            var instance = SpawnObject(m_SpawnObject, m_Client);
             yield return m_ClientCodecHook.WaitForMessageReceived<CreateObjectMessage>();
             var component = instance.GetComponent<TestNetworkComponent>();
 
@@ -262,9 +219,7 @@ namespace Unity.Netcode.RuntimeTests
         [UnityTest]
         public IEnumerator NetworkListDelta_WithValueUpdate()
         {
-            var networkObj = CreateNetworkObjectPrefab("TestObject");
-            networkObj.AddComponent<TestNetworkComponent>();
-            var instance = SpawnObject(networkObj, Client);
+            var instance = SpawnObject(m_SpawnObject, m_Client);
             yield return m_ClientCodecHook.WaitForMessageReceived<CreateObjectMessage>();
             var component = instance.GetComponent<TestNetworkComponent>();
 
@@ -341,14 +296,14 @@ namespace Unity.Netcode.RuntimeTests
         [UnityTest]
         public IEnumerator SceneEventMessageLoad()
         {
-            Client.SceneManager.SkipSceneHandling = true;
-            var eventData = new SceneEventData(Client)
+            m_Client.SceneManager.SkipSceneHandling = true;
+            var eventData = new SceneEventData(m_Client)
             {
                 SceneEventType = SceneEventType.Load,
                 LoadSceneMode = LoadSceneMode.Single,
                 SceneEventProgressId = Guid.NewGuid(),
                 SceneAsset = "SomeRandomSceneName",
-                SceneHandle = 23456,
+                SceneHandle = new NetworkSceneHandle(23456, true)
             };
 
             var message = new SceneEventMessage()
@@ -361,20 +316,24 @@ namespace Unity.Netcode.RuntimeTests
         [UnityTest]
         public IEnumerator SceneEventMessageLoadWithObjects()
         {
-            Client.SceneManager.SkipSceneHandling = true;
+            m_Client.SceneManager.SkipSceneHandling = true;
             var prefabNetworkObject = m_SpawnObject.GetComponent<NetworkObject>();
 
-            Client.SceneManager.ScenePlacedObjects.Add(0, new Dictionary<int, NetworkObject>()
+            // We need to preSpawn the behaviours to set the internal data for the synchronize methods
+            prefabNetworkObject.NetworkManagerOwner = m_Client;
+            prefabNetworkObject.InvokeBehaviourNetworkPreSpawn();
+
+            m_Client.SceneManager.ScenePlacedObjects.Add(0, new Dictionary<NetworkSceneHandle, NetworkObject>()
             {
-                { 1, prefabNetworkObject }
+                { new NetworkSceneHandle(1, true), prefabNetworkObject }
             });
-            var eventData = new SceneEventData(Client)
+            var eventData = new SceneEventData(m_Client)
             {
                 SceneEventType = SceneEventType.Load,
                 LoadSceneMode = LoadSceneMode.Single,
                 SceneEventProgressId = Guid.NewGuid(),
                 SceneAsset = "SomeRandomSceneName",
-                SceneHandle = 23456,
+                SceneHandle = new NetworkSceneHandle(23456, true),
             };
 
             var message = new SceneEventMessage()
@@ -387,14 +346,14 @@ namespace Unity.Netcode.RuntimeTests
         [UnityTest]
         public IEnumerator SceneEventMessageUnload()
         {
-            Client.SceneManager.SkipSceneHandling = true;
-            var eventData = new SceneEventData(Client)
+            m_Client.SceneManager.SkipSceneHandling = true;
+            var eventData = new SceneEventData(m_Client)
             {
                 SceneEventType = SceneEventType.Unload,
                 LoadSceneMode = LoadSceneMode.Single,
                 SceneEventProgressId = Guid.NewGuid(),
                 SceneAsset = "SomeRandomSceneName",
-                SceneHandle = 23456,
+                SceneHandle = new NetworkSceneHandle(23456, true),
             };
 
             var message = new SceneEventMessage()
@@ -407,14 +366,14 @@ namespace Unity.Netcode.RuntimeTests
         [UnityTest]
         public IEnumerator SceneEventMessageLoadComplete()
         {
-            Client.SceneManager.SkipSceneHandling = true;
-            var eventData = new SceneEventData(Client)
+            m_Client.SceneManager.SkipSceneHandling = true;
+            var eventData = new SceneEventData(m_Client)
             {
                 SceneEventType = SceneEventType.LoadComplete,
                 LoadSceneMode = LoadSceneMode.Single,
                 SceneEventProgressId = Guid.NewGuid(),
                 SceneAsset = "SomeRandomSceneName",
-                SceneHandle = 23456,
+                SceneHandle = new NetworkSceneHandle(23456, true),
             };
 
             var message = new SceneEventMessage()
@@ -427,14 +386,14 @@ namespace Unity.Netcode.RuntimeTests
         [UnityTest]
         public IEnumerator SceneEventMessageUnloadComplete()
         {
-            Client.SceneManager.SkipSceneHandling = true;
-            var eventData = new SceneEventData(Client)
+            m_Client.SceneManager.SkipSceneHandling = true;
+            var eventData = new SceneEventData(m_Client)
             {
                 SceneEventType = SceneEventType.UnloadComplete,
                 LoadSceneMode = LoadSceneMode.Single,
                 SceneEventProgressId = Guid.NewGuid(),
                 SceneAsset = "SomeRandomSceneName",
-                SceneHandle = 23456,
+                SceneHandle = new NetworkSceneHandle(23456, true),
             };
 
             var message = new SceneEventMessage()
@@ -447,16 +406,16 @@ namespace Unity.Netcode.RuntimeTests
         [UnityTest]
         public IEnumerator SceneEventMessageLoadCompleted()
         {
-            Client.SceneManager.SkipSceneHandling = true;
-            var eventData = new SceneEventData(Client)
+            m_Client.SceneManager.SkipSceneHandling = true;
+            var eventData = new SceneEventData(m_Client)
             {
                 SceneEventType = SceneEventType.LoadEventCompleted,
                 LoadSceneMode = LoadSceneMode.Single,
                 SceneEventProgressId = Guid.NewGuid(),
                 SceneAsset = "SomeRandomSceneName",
-                SceneHandle = 23456,
+                SceneHandle = new NetworkSceneHandle(23456, true),
                 ClientsCompleted = new List<ulong>() { k_ClientId },
-                ClientsTimedOut = new List<ulong>() { 123456789 },
+                ClientsTimedOut = new List<ulong>() { 23456789 },
             };
 
             var message = new SceneEventMessage()
@@ -469,16 +428,16 @@ namespace Unity.Netcode.RuntimeTests
         [UnityTest]
         public IEnumerator SceneEventMessageUnloadLoadCompleted()
         {
-            Client.SceneManager.SkipSceneHandling = true;
-            var eventData = new SceneEventData(Client)
+            m_Client.SceneManager.SkipSceneHandling = true;
+            var eventData = new SceneEventData(m_Client)
             {
                 SceneEventType = SceneEventType.UnloadEventCompleted,
                 LoadSceneMode = LoadSceneMode.Single,
                 SceneEventProgressId = Guid.NewGuid(),
                 SceneAsset = "SomeRandomSceneName",
-                SceneHandle = 23456,
+                SceneHandle = new NetworkSceneHandle(23456, true),
                 ClientsCompleted = new List<ulong>() { k_ClientId },
-                ClientsTimedOut = new List<ulong>() { 123456789 },
+                ClientsTimedOut = new List<ulong>() { 23456789 },
             };
 
             var message = new SceneEventMessage()
@@ -491,19 +450,19 @@ namespace Unity.Netcode.RuntimeTests
         [UnityTest]
         public IEnumerator SceneEventMessageSynchronize()
         {
-            Client.SceneManager.SkipSceneHandling = true;
-            var eventData = new SceneEventData(Client)
+            m_Client.SceneManager.SkipSceneHandling = true;
+            var eventData = new SceneEventData(m_Client)
             {
                 SceneEventType = SceneEventType.Synchronize,
                 LoadSceneMode = LoadSceneMode.Single,
                 ClientSynchronizationMode = LoadSceneMode.Single,
                 SceneAsset = "SomeRandomSceneName",
-                SceneHandle = 23456,
-                ScenesToSynchronize = new Queue<string>()
+                SceneHandle = new NetworkSceneHandle(23456, true),
+                ScenesToSynchronize = new Queue<uint>()
             };
-            eventData.ScenesToSynchronize.Enqueue("SomeRandomSceneName2");
-            eventData.SceneHandlesToSynchronize = new Queue<uint>();
-            eventData.SceneHandlesToSynchronize.Enqueue(202);
+            eventData.ScenesToSynchronize.Enqueue(101);
+            eventData.SceneHandlesToSynchronize = new Queue<NetworkSceneHandle>();
+            eventData.SceneHandlesToSynchronize.Enqueue(new NetworkSceneHandle(202, true));
 
 
             var message = new SceneEventMessage()
@@ -516,14 +475,14 @@ namespace Unity.Netcode.RuntimeTests
         [UnityTest]
         public IEnumerator SceneEventMessageReSynchronize()
         {
-            Client.SceneManager.SkipSceneHandling = true;
-            var eventData = new SceneEventData(Client)
+            m_Client.SceneManager.SkipSceneHandling = true;
+            var eventData = new SceneEventData(m_Client)
             {
                 SceneEventType = SceneEventType.ReSynchronize,
                 LoadSceneMode = LoadSceneMode.Single,
                 ClientSynchronizationMode = LoadSceneMode.Single,
                 SceneAsset = "SomeRandomSceneName",
-                SceneHandle = 23456,
+                SceneHandle = new NetworkSceneHandle(23456, true),
             };
 
             var message = new SceneEventMessage()
@@ -536,14 +495,14 @@ namespace Unity.Netcode.RuntimeTests
         [UnityTest]
         public IEnumerator SceneEventMessageSynchronizeComplete()
         {
-            Client.SceneManager.SkipSceneHandling = true;
-            var eventData = new SceneEventData(Client)
+            m_Client.SceneManager.SkipSceneHandling = true;
+            var eventData = new SceneEventData(m_Client)
             {
                 SceneEventType = SceneEventType.ReSynchronize,
                 LoadSceneMode = LoadSceneMode.Single,
                 ClientSynchronizationMode = LoadSceneMode.Single,
                 SceneAsset = "SomeRandomSceneName",
-                SceneHandle = 23456,
+                SceneHandle = new NetworkSceneHandle(23456, true),
             };
 
             var message = new SceneEventMessage()
@@ -556,11 +515,11 @@ namespace Unity.Netcode.RuntimeTests
         [UnityTest]
         public IEnumerator SceneEventMessageActiveSceneChanged()
         {
-            Client.SceneManager.SkipSceneHandling = true;
-            var eventData = new SceneEventData(Client)
+            m_Client.SceneManager.SkipSceneHandling = true;
+            var eventData = new SceneEventData(m_Client)
             {
                 SceneEventType = SceneEventType.ActiveSceneChanged,
-                ActiveSceneAsset = "SomeRandomSceneName"
+                ActiveSceneAsset = "ActiveScene"
             };
 
             var message = new SceneEventMessage()
@@ -573,15 +532,16 @@ namespace Unity.Netcode.RuntimeTests
         [UnityTest, Ignore("Serializing twice causes data to disappear in the SceneManager for this event")]
         public IEnumerator SceneEventMessageObjectSceneChanged()
         {
-            Client.SceneManager.SkipSceneHandling = true;
+            m_Client.SceneManager.SkipSceneHandling = true;
             var prefabNetworkObject = m_SpawnObject.GetComponent<NetworkObject>();
-            Client.SceneManager.ObjectsMigratedIntoNewScene = new Dictionary<int, Dictionary<ulong, List<NetworkObject>>>
+            var sceneHandle = new NetworkSceneHandle(23456, true);
+            m_Client.SceneManager.ObjectsMigratedIntoNewScene = new Dictionary<NetworkSceneHandle, Dictionary<ulong, List<NetworkObject>>>
             {
-                { 0, new Dictionary<ulong, List<NetworkObject>>()}
+                { sceneHandle, new Dictionary<ulong, List<NetworkObject>>()}
             };
 
-            Client.SceneManager.ObjectsMigratedIntoNewScene[0].Add(Client.LocalClientId, new List<NetworkObject>() { prefabNetworkObject });
-            var eventData = new SceneEventData(Client)
+            m_Client.SceneManager.ObjectsMigratedIntoNewScene[sceneHandle].Add(m_Client.LocalClientId, new List<NetworkObject>() { prefabNetworkObject });
+            var eventData = new SceneEventData(m_Client)
             {
                 SceneEventType = SceneEventType.ObjectSceneChanged,
             };
@@ -596,12 +556,13 @@ namespace Unity.Netcode.RuntimeTests
 
         private IEnumerator SendMessage<T>(ref T message) where T : INetworkMessage
         {
-            Client.MessageManager.SetVersion(k_ClientId, XXHash.Hash32(typeof(T).FullName), message.Version);
+            var delivery = MessageDelivery.GetDelivery(typeof(T));
+            m_Client.MessageManager.SetVersion(k_ClientId, XXHash.Hash32(typeof(T).FullName), message.Version);
 
             var clientIds = new NativeArray<ulong>(1, Allocator.Temp);
             clientIds[0] = k_ClientId;
-            Client.MessageManager.SendMessage(ref message, NetworkDelivery.ReliableSequenced, clientIds);
-            Client.MessageManager.ProcessSendQueues();
+            m_Client.MessageManager.SendMessage(ref message, delivery, clientIds);
+            m_Client.MessageManager.ProcessSendQueues();
             return m_ClientCodecHook.WaitForMessageReceived(message);
         }
 

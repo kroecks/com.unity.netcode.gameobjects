@@ -1,8 +1,10 @@
 #if COM_UNITY_MODULES_ANIMATION
 using System;
 using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 using Unity.Collections;
 using Unity.Collections.LowLevel.Unsafe;
+using Unity.Netcode.Runtime;
 using UnityEngine;
 #if UNITY_EDITOR
 using UnityEditor.Animations;
@@ -12,8 +14,8 @@ namespace Unity.Netcode.Components
 {
     internal class NetworkAnimatorStateChangeHandler : INetworkUpdateSystem
     {
-        private NetworkAnimator m_NetworkAnimator;
-        private bool m_IsServer;
+        private readonly NetworkAnimator m_NetworkAnimator;
+        private readonly bool m_IsServer;
 
         /// <summary>
         /// This removes sending RPCs from within RPCs when the
@@ -26,13 +28,13 @@ namespace Unity.Netcode.Components
             foreach (var animationUpdate in m_SendAnimationUpdates)
             {
 
-                if (m_NetworkAnimator.NetworkManager.DistributedAuthorityMode)
+                if (m_NetworkAnimator.DistributedAuthorityMode)
                 {
                     m_NetworkAnimator.SendAnimStateRpc(animationUpdate.AnimationMessage);
                 }
                 else
                 {
-                    m_NetworkAnimator.SendAnimStateClientRpc(animationUpdate.AnimationMessage, animationUpdate.ClientRpcParams);
+                    m_NetworkAnimator.SendClientAnimStateRpc(animationUpdate.AnimationMessage, animationUpdate.RpcParams);
                 }
             }
 
@@ -40,20 +42,20 @@ namespace Unity.Netcode.Components
 
             foreach (var sendEntry in m_SendParameterUpdates)
             {
-                if (m_NetworkAnimator.NetworkManager.DistributedAuthorityMode)
+                if (m_NetworkAnimator.DistributedAuthorityMode)
                 {
                     m_NetworkAnimator.SendParametersUpdateRpc(sendEntry.ParametersUpdateMessage);
                 }
                 else
                 {
-                    m_NetworkAnimator.SendParametersUpdateClientRpc(sendEntry.ParametersUpdateMessage, sendEntry.ClientRpcParams);
+                    m_NetworkAnimator.SendClientParametersUpdateRpc(sendEntry.ParametersUpdateMessage, sendEntry.RpcParams);
                 }
             }
             m_SendParameterUpdates.Clear();
 
             foreach (var sendEntry in m_SendTriggerUpdates)
             {
-                if (m_NetworkAnimator.NetworkManager.DistributedAuthorityMode)
+                if (m_NetworkAnimator.DistributedAuthorityMode)
                 {
                     m_NetworkAnimator.SendAnimTriggerRpc(sendEntry.AnimationTriggerMessage);
                 }
@@ -61,15 +63,22 @@ namespace Unity.Netcode.Components
                 {
                     if (!sendEntry.SendToServer)
                     {
-                        m_NetworkAnimator.SendAnimTriggerClientRpc(sendEntry.AnimationTriggerMessage, sendEntry.ClientRpcParams);
+                        m_NetworkAnimator.SendClientAnimTriggerRpc(sendEntry.AnimationTriggerMessage, sendEntry.RpcParams);
                     }
                     else
                     {
-                        m_NetworkAnimator.SendAnimTriggerServerRpc(sendEntry.AnimationTriggerMessage);
+                        m_NetworkAnimator.SendServerAnimTriggerRpc(sendEntry.AnimationTriggerMessage);
                     }
                 }
             }
             m_SendTriggerUpdates.Clear();
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private bool HasAuthority()
+        {
+            var isServerAuthority = m_NetworkAnimator.IsServerAuthoritative();
+            return (!isServerAuthority && m_NetworkAnimator.IsOwner) || (isServerAuthority && (m_NetworkAnimator.IsServer));
         }
 
         /// <inheritdoc />
@@ -79,25 +88,33 @@ namespace Unity.Netcode.Components
             {
                 case NetworkUpdateStage.PreUpdate:
                     {
-                        // Only the owner or the server send messages
-                        if (m_NetworkAnimator.IsOwner || m_IsServer)
+                        // NOTE: This script has an order of operations requirement where
+                        // the authority and/or server will flush messages first, parameter updates are applied
+                        // for all instances, and then only the authority will check for animator changes. Changing
+                        // the order could cause timing related issues.
+
+                        var hasAuthority = HasAuthority();
+                        // Only the authority or the server will send messages
+                        // The only exception is server authoritative and owners that are sending animation triggers.
+                        if (hasAuthority || m_IsServer || (m_NetworkAnimator.IsServerAuthoritative() && m_NetworkAnimator.IsOwner))
                         {
                             // Flush any pending messages
                             FlushMessages();
                         }
 
                         // Everyone applies any parameters updated
-                        for (int i = 0; i < m_ProcessParameterUpdates.Count; i++)
+                        if (m_ProcessParameterUpdates.Count > 0)
                         {
-                            var parameterUpdate = m_ProcessParameterUpdates[i];
-                            m_NetworkAnimator.UpdateParameters(ref parameterUpdate);
+                            for (int i = 0; i < m_ProcessParameterUpdates.Count; i++)
+                            {
+                                var parameterUpdate = m_ProcessParameterUpdates[i];
+                                m_NetworkAnimator.UpdateParameters(ref parameterUpdate);
+                            }
+                            m_ProcessParameterUpdates.Clear();
                         }
-                        m_ProcessParameterUpdates.Clear();
-                        var isServerAuthority = m_NetworkAnimator.IsServerAuthoritative();
 
-                        // owners when owner authoritative or the server when server authoritative are the only instances that
-                        // checks for Animator changes
-                        if ((!isServerAuthority && m_NetworkAnimator.IsOwner) || (isServerAuthority && m_NetworkAnimator.IsServer))
+                        // Only the authority checks for Animator changes
+                        if (hasAuthority)
                         {
                             m_NetworkAnimator.CheckForAnimatorChanges();
                         }
@@ -111,37 +128,37 @@ namespace Unity.Netcode.Components
         /// </summary>
         private struct AnimationUpdate
         {
-            public ClientRpcParams ClientRpcParams;
+            public RpcParams RpcParams;
             public NetworkAnimator.AnimationMessage AnimationMessage;
         }
 
-        private List<AnimationUpdate> m_SendAnimationUpdates = new List<AnimationUpdate>();
+        private readonly List<AnimationUpdate> m_SendAnimationUpdates = new List<AnimationUpdate>();
 
         /// <summary>
         /// Invoked when a server needs to forwarding an update to the animation state
         /// </summary>
-        internal void SendAnimationUpdate(NetworkAnimator.AnimationMessage animationMessage, ClientRpcParams clientRpcParams = default)
+        internal void SendAnimationUpdate(NetworkAnimator.AnimationMessage animationMessage, RpcParams rpcParams = default)
         {
-            m_SendAnimationUpdates.Add(new AnimationUpdate() { ClientRpcParams = clientRpcParams, AnimationMessage = animationMessage });
+            m_SendAnimationUpdates.Add(new AnimationUpdate { RpcParams = rpcParams, AnimationMessage = animationMessage });
         }
 
         private struct ParameterUpdate
         {
-            public ClientRpcParams ClientRpcParams;
+            public RpcParams RpcParams;
             public NetworkAnimator.ParametersUpdateMessage ParametersUpdateMessage;
         }
 
-        private List<ParameterUpdate> m_SendParameterUpdates = new List<ParameterUpdate>();
+        private readonly List<ParameterUpdate> m_SendParameterUpdates = new List<ParameterUpdate>();
 
         /// <summary>
         /// Invoked when a server needs to forwarding an update to the parameter state
         /// </summary>
-        internal void SendParameterUpdate(NetworkAnimator.ParametersUpdateMessage parametersUpdateMessage, ClientRpcParams clientRpcParams = default)
+        internal void SendParameterUpdate(NetworkAnimator.ParametersUpdateMessage parametersUpdateMessage, RpcParams rpcParams = default)
         {
-            m_SendParameterUpdates.Add(new ParameterUpdate() { ClientRpcParams = clientRpcParams, ParametersUpdateMessage = parametersUpdateMessage });
+            m_SendParameterUpdates.Add(new ParameterUpdate { RpcParams = rpcParams, ParametersUpdateMessage = parametersUpdateMessage });
         }
 
-        private List<NetworkAnimator.ParametersUpdateMessage> m_ProcessParameterUpdates = new List<NetworkAnimator.ParametersUpdateMessage>();
+        private readonly List<NetworkAnimator.ParametersUpdateMessage> m_ProcessParameterUpdates = new List<NetworkAnimator.ParametersUpdateMessage>();
         internal void ProcessParameterUpdate(NetworkAnimator.ParametersUpdateMessage parametersUpdateMessage)
         {
             m_ProcessParameterUpdates.Add(parametersUpdateMessage);
@@ -150,35 +167,35 @@ namespace Unity.Netcode.Components
         private struct TriggerUpdate
         {
             public bool SendToServer;
-            public ClientRpcParams ClientRpcParams;
+            public RpcParams RpcParams;
             public NetworkAnimator.AnimationTriggerMessage AnimationTriggerMessage;
         }
 
-        private List<TriggerUpdate> m_SendTriggerUpdates = new List<TriggerUpdate>();
+        private readonly List<TriggerUpdate> m_SendTriggerUpdates = new List<TriggerUpdate>();
 
         /// <summary>
         /// Invoked when a server needs to forward an update to a Trigger state
         /// </summary>
-        internal void QueueTriggerUpdateToClient(NetworkAnimator.AnimationTriggerMessage animationTriggerMessage, ClientRpcParams clientRpcParams = default)
+        internal void QueueTriggerUpdateToClient(NetworkAnimator.AnimationTriggerMessage animationTriggerMessage, RpcParams clientRpcParams = default)
         {
-            m_SendTriggerUpdates.Add(new TriggerUpdate() { ClientRpcParams = clientRpcParams, AnimationTriggerMessage = animationTriggerMessage });
+            m_SendTriggerUpdates.Add(new TriggerUpdate { RpcParams = clientRpcParams, AnimationTriggerMessage = animationTriggerMessage });
         }
 
         internal void QueueTriggerUpdateToServer(NetworkAnimator.AnimationTriggerMessage animationTriggerMessage)
         {
-            m_SendTriggerUpdates.Add(new TriggerUpdate() { AnimationTriggerMessage = animationTriggerMessage, SendToServer = true });
+            m_SendTriggerUpdates.Add(new TriggerUpdate { AnimationTriggerMessage = animationTriggerMessage, SendToServer = true });
         }
 
         internal void DeregisterUpdate()
         {
-            NetworkUpdateLoop.UnregisterNetworkUpdate(this, NetworkUpdateStage.PreUpdate);
+            this.UnregisterNetworkUpdate(NetworkUpdateStage.PreUpdate);
         }
 
         internal NetworkAnimatorStateChangeHandler(NetworkAnimator networkAnimator)
         {
             m_NetworkAnimator = networkAnimator;
-            m_IsServer = networkAnimator.NetworkManager.IsServer;
-            NetworkUpdateLoop.RegisterNetworkUpdate(this, NetworkUpdateStage.PreUpdate);
+            m_IsServer = networkAnimator.LocalNetworkManager.IsServer;
+            this.RegisterNetworkUpdate(NetworkUpdateStage.PreUpdate);
         }
     }
 
@@ -186,10 +203,17 @@ namespace Unity.Netcode.Components
     /// NetworkAnimator enables remote synchronization of <see cref="UnityEngine.Animator"/> state for on network objects.
     /// </summary>
     [AddComponentMenu("Netcode/Network Animator")]
+    [HelpURL(HelpUrls.NetworkAnimator)]
     public class NetworkAnimator : NetworkBehaviour, ISerializationCallbackReceiver
     {
+#if UNITY_EDITOR
+        [HideInInspector]
+        [SerializeField]
+        internal bool NetworkAnimatorExpanded;
+#endif
+
         [Serializable]
-        internal class TransitionStateinfo
+        internal class TransitionStateInfo
         {
             public bool IsCrossFadeExit;
             public int Layer;
@@ -201,37 +225,104 @@ namespace Unity.Netcode.Components
         }
 
         /// <summary>
+        /// Determines if the server or client owner pushes animation state updates.
+        /// </summary>
+        public enum AuthorityModes
+        {
+            /// <summary>
+            /// Server pushes animator state updates.
+            /// </summary>
+            Server,
+            /// <summary>
+            /// Client owner pushes animator state updates.
+            /// </summary>
+            Owner,
+        }
+
+        /// <summary>
+        /// Determines whether this <see cref="NetworkAnimator"/> instance will have state updates pushed by the server or the client owner.
+        /// <see cref="AuthorityModes"/>
+        /// </summary>
+#if MULTIPLAYER_SERVICES_SDK_INSTALLED
+        [Tooltip("Selects who has authority(sends state updates) over the<see cref=\"NetworkAnimator\"/> instance.When the network topology is set to distributed authority, this always defaults to owner authority.If server (the default), then only server-side adjustments to the " +
+            "<see cref=\"NetworkAnimator\"> instance will be synchronized with clients. If owner (or client), then only the owner-side adjustments to the <see cref=\"NetworkAnimator\"/> instance will be synchronized with both the server and other clients.")]
+#else
+        [Tooltip("Selects who has authority (sends state updates) over the <see cref=\"NetworkAnimator\"/> instance. If server (the default), then only server-side adjustments to the <see cref=\"NetworkAnimator\"/> instance will be synchronized with clients. If owner (or client), " +
+            "then only the owner-side adjustments to the <see cref=\"NetworkAnimator\"/> instance will be synchronized with both the server and other clients.")]
+#endif
+        public AuthorityModes AuthorityMode;
+
+        [Tooltip("The animator that this NetworkAnimator component will be synchronizing.")]
+        [SerializeField] private Animator m_Animator;
+
+        /// <summary>
+        /// The <see cref="Animator"/> associated with this <see cref="NetworkAnimator"/> instance.
+        /// </summary>
+        public Animator Animator
+        {
+            get => m_Animator;
+            set => m_Animator = value;
+        }
+
+        /// <summary>
         /// Used to build the destination state to transition info table
         /// </summary>
         [HideInInspector]
         [SerializeField]
-        internal List<TransitionStateinfo> TransitionStateInfoList;
+        internal List<TransitionStateInfo> TransitionStateInfoList;
 
         // Used to get the associated transition information required to synchronize late joining clients with transitions
         // [Layer][DestinationState][TransitionStateInfo]
-        private Dictionary<int, Dictionary<int, TransitionStateinfo>> m_DestinationStateToTransitioninfo = new Dictionary<int, Dictionary<int, TransitionStateinfo>>();
+        private readonly Dictionary<int, Dictionary<int, TransitionStateInfo>> m_DestinationStateToTransitionInfo = new Dictionary<int, Dictionary<int, TransitionStateInfo>>();
+
+        // Named differently to avoid serialization conflicts with NetworkBehaviour
+        internal NetworkManager LocalNetworkManager;
+
+        internal bool DistributedAuthorityMode;
 
         /// <summary>
-        /// Builds the m_DestinationStateToTransitioninfo lookup table
+        /// Builds the <see cref="m_DestinationStateToTransitionInfo"/> lookup table
         /// </summary>
         private void BuildDestinationToTransitionInfoTable()
         {
             foreach (var entry in TransitionStateInfoList)
             {
-                if (!m_DestinationStateToTransitioninfo.ContainsKey(entry.Layer))
-                {
-                    m_DestinationStateToTransitioninfo.Add(entry.Layer, new Dictionary<int, TransitionStateinfo>());
-                }
-                var destinationStateTransitionInfo = m_DestinationStateToTransitioninfo[entry.Layer];
-                if (!destinationStateTransitionInfo.ContainsKey(entry.DestinationState))
-                {
-                    destinationStateTransitionInfo.Add(entry.DestinationState, entry);
-                }
+                m_DestinationStateToTransitionInfo.TryAdd(entry.Layer, new Dictionary<int, TransitionStateInfo>());
+                var destinationStateTransitionInfo = m_DestinationStateToTransitionInfo[entry.Layer];
+                destinationStateTransitionInfo.TryAdd(entry.DestinationState, entry);
             }
         }
 
+        [Serializable]
+        internal class AnimatorParameterEntry
+        {
+#pragma warning disable IDE1006
+            [HideInInspector]
+            public string name;
+#pragma warning restore IDE1006
+            public int NameHash;
+            public bool Synchronize;
+            public AnimatorControllerParameterType ParameterType;
+        }
+
+        [Serializable]
+        internal class AnimatorParametersListContainer
+        {
+            public List<AnimatorParameterEntry> ParameterEntries = new List<AnimatorParameterEntry>();
+        }
+
+        [SerializeField]
+        internal AnimatorParametersListContainer AnimatorParameterEntries;
+
+        private readonly Dictionary<int, AnimatorParameterEntry> m_AnimatorParameterEntryTable = new Dictionary<int, AnimatorParameterEntry>();
 
 #if UNITY_EDITOR
+        [HideInInspector]
+        [SerializeField]
+        internal bool AnimatorParametersExpanded;
+
+        private readonly Dictionary<int, AnimatorControllerParameter> m_ParameterToNameLookup = new Dictionary<int, AnimatorControllerParameter>();
+
         private void ParseStateMachineStates(int layerIndex, ref AnimatorController animatorController, ref AnimatorStateMachine stateMachine)
         {
             for (int y = 0; y < stateMachine.states.Length; y++)
@@ -271,7 +362,7 @@ namespace Unity.Netcode.Components
                                         }
                                         else if (transition.destinationState != null)
                                         {
-                                            var transitionInfo = new TransitionStateinfo()
+                                            var transitionInfo = new TransitionStateInfo()
                                             {
                                                 Layer = layerIndex,
                                                 OriginatingState = animatorState.nameHash,
@@ -308,8 +399,19 @@ namespace Unity.Netcode.Components
                 return;
             }
 
-            TransitionStateInfoList = new List<TransitionStateinfo>();
-            var animatorController = m_Animator.runtimeAnimatorController as AnimatorController;
+            TransitionStateInfoList = new List<TransitionStateInfo>();
+            var animControllerType = m_Animator.runtimeAnimatorController.GetType();
+            var animatorController = (AnimatorController)null;
+
+            if (animControllerType == typeof(AnimatorOverrideController))
+            {
+                animatorController = ((AnimatorOverrideController)m_Animator.runtimeAnimatorController).runtimeAnimatorController as AnimatorController;
+            }
+            else if (animControllerType == typeof(AnimatorController))
+            {
+                animatorController = m_Animator.runtimeAnimatorController as AnimatorController;
+            }
+
             if (animatorController == null)
             {
                 return;
@@ -322,6 +424,85 @@ namespace Unity.Netcode.Components
             }
         }
 
+        private void ProcessParameterEntries()
+        {
+            if (!Animator)
+            {
+                if (AnimatorParameterEntries != null && AnimatorParameterEntries.ParameterEntries.Count > 0)
+                {
+                    AnimatorParameterEntries.ParameterEntries.Clear();
+                }
+                return;
+            }
+
+            var animControllerType = m_Animator.runtimeAnimatorController.GetType();
+            var animatorController = (AnimatorController)null;
+
+            if (animControllerType == typeof(AnimatorOverrideController))
+            {
+                animatorController = ((AnimatorOverrideController)m_Animator.runtimeAnimatorController).runtimeAnimatorController as AnimatorController;
+            }
+            else if (animControllerType == typeof(AnimatorController))
+            {
+                animatorController = m_Animator.runtimeAnimatorController as AnimatorController;
+            }
+            if (animatorController == null)
+            {
+                return;
+            }
+            var parameters = animatorController.parameters;
+
+            var parametersToRemove = new List<AnimatorParameterEntry>();
+            m_ParameterToNameLookup.Clear();
+            foreach (var parameter in parameters)
+            {
+                m_ParameterToNameLookup.Add(parameter.nameHash, parameter);
+            }
+
+            // Rebuild the parameter entry table for the inspector view
+            m_AnimatorParameterEntryTable.Clear();
+            foreach (var parameterEntry in AnimatorParameterEntries.ParameterEntries)
+            {
+                // Check for removed parameters.
+                if (!m_ParameterToNameLookup.ContainsKey(parameterEntry.NameHash))
+                {
+                    parametersToRemove.Add(parameterEntry);
+                    // Skip this removed entry
+                    continue;
+                }
+
+                // Build the list of known parameters
+                m_AnimatorParameterEntryTable.TryAdd(parameterEntry.NameHash, parameterEntry);
+
+                var parameter = m_ParameterToNameLookup[parameterEntry.NameHash];
+                parameterEntry.name = parameter.name;
+                parameterEntry.ParameterType = parameter.type;
+            }
+
+            // Update for removed parameters
+            foreach (var parameterEntry in parametersToRemove)
+            {
+                AnimatorParameterEntries.ParameterEntries.Remove(parameterEntry);
+            }
+
+            // Update any newly added parameters
+            foreach (var parameterLookUp in m_ParameterToNameLookup)
+            {
+                if (!m_AnimatorParameterEntryTable.ContainsKey(parameterLookUp.Value.nameHash))
+                {
+                    var animatorParameterEntry = new AnimatorParameterEntry()
+                    {
+                        name = parameterLookUp.Value.name,
+                        NameHash = parameterLookUp.Value.nameHash,
+                        ParameterType = parameterLookUp.Value.type,
+                        Synchronize = true,
+                    };
+                    AnimatorParameterEntries.ParameterEntries.Add(animatorParameterEntry);
+                    m_AnimatorParameterEntryTable.Add(parameterLookUp.Value.nameHash, animatorParameterEntry);
+                }
+            }
+        }
+
         /// <summary>
         /// In-Editor Only
         /// Virtual OnValidate method for custom derived NetworkAnimator classes.
@@ -329,6 +510,7 @@ namespace Unity.Netcode.Components
         protected virtual void OnValidate()
         {
             BuildTransitionStateInfoList();
+            ProcessParameterEntries();
         }
 #endif
 
@@ -408,7 +590,7 @@ namespace Unity.Netcode.Components
                 serializer.SerializeValue(ref NormalizedTime);
                 serializer.SerializeValue(ref Weight);
 
-                // Cross fading includes the duration of the cross fade.
+                // Cross-fading includes the duration of the cross-fade.
                 if (CrossFade)
                 {
                     serializer.SerializeValue(ref Duration);
@@ -482,24 +664,19 @@ namespace Unity.Netcode.Components
             }
         }
 
-        [SerializeField] private Animator m_Animator;
-
-        public Animator Animator
-        {
-            get { return m_Animator; }
-            set
-            {
-                m_Animator = value;
-            }
-        }
-
-        internal bool IsServerAuthoritative()
+        /// <summary>
+        /// Determines whether the <see cref="NetworkAnimator"/> is <see cref="AuthorityModes.Server"/> or <see cref="AuthorityModes.Owner"/> based on the <see cref="AuthorityMode"/> field.
+        /// Optionally, you can still derive from <see cref="NetworkAnimator"/> and override the <see cref="OnIsServerAuthoritative"/> method.
+        /// </summary>
+        /// <returns>True if this <see cref="NetworkAnimator"/> is server authoritative, false otherwise</returns>
+        public bool IsServerAuthoritative()
         {
             return OnIsServerAuthoritative();
         }
 
         /// <summary>
-        /// Override this method and return false to switch to owner authoritative mode.
+        /// Override this method and return false to switch to owner authoritative mode.<br />
+        /// Alternately, you can update the <see cref="AuthorityMode"/> field within the inspector view to select the authority mode.
         /// </summary>
         /// <remarks>
         /// When using a distributed authority network topology, this will default to
@@ -507,16 +684,19 @@ namespace Unity.Netcode.Components
         /// </remarks>
         protected virtual bool OnIsServerAuthoritative()
         {
-            return NetworkManager ? !NetworkManager.DistributedAuthorityMode : true;
+            if (DistributedAuthorityMode)
+            {
+                return false;
+            }
+            return AuthorityMode == AuthorityModes.Server;
         }
 
         private int[] m_TransitionHash;
         private int[] m_AnimationHash;
         private float[] m_LayerWeights;
-        private static byte[] s_EmptyArray = new byte[] { };
         private List<int> m_ParametersToUpdate;
-        private List<ulong> m_ClientSendList;
-        private ClientRpcParams m_ClientRpcParams;
+        private RpcParams m_RpcParams;
+        private IGroupRpcTarget m_TargetGroup;
         private AnimationMessage m_AnimationMessage;
         private NetworkAnimatorStateChangeHandler m_NetworkAnimatorStateChangeHandler;
 
@@ -527,6 +707,7 @@ namespace Unity.Netcode.Components
 
         private unsafe struct AnimatorParamCache
         {
+            internal bool Exclude;
             internal int Hash;
             internal int Type;
             internal fixed byte Value[4]; // this is a max size of 4 bytes
@@ -560,16 +741,15 @@ namespace Unity.Netcode.Components
         /// </summary>
         private void SpawnCleanup()
         {
-            if (m_NetworkAnimatorStateChangeHandler != null)
-            {
-                m_NetworkAnimatorStateChangeHandler.DeregisterUpdate();
-                m_NetworkAnimatorStateChangeHandler = null;
-            }
+            m_NetworkAnimatorStateChangeHandler?.DeregisterUpdate();
+            m_NetworkAnimatorStateChangeHandler = null;
         }
 
         public override void OnDestroy()
         {
             SpawnCleanup();
+
+            m_TargetGroup?.Target?.Dispose();
 
             if (m_CachedAnimatorParameters != null && m_CachedAnimatorParameters.IsCreated)
             {
@@ -588,9 +768,14 @@ namespace Unity.Netcode.Components
             if (!m_Animator)
             {
 #if !UNITY_EDITOR
-                Debug.LogError($"{nameof(NetworkAnimator)} {name} does not have an {nameof(UnityEngine.Animator)} assigned to it. The {nameof(NetworkAnimator)} will not initialize properly.");
+                Debug.LogWarning($"{nameof(NetworkAnimator)} {name} does not have an {nameof(UnityEngine.Animator)} assigned to it. The {nameof(NetworkAnimator)} will not initialize properly.");
 #endif
                 return;
+            }
+
+            foreach (var parameterEntry in AnimatorParameterEntries.ParameterEntries)
+            {
+                m_AnimatorParameterEntryTable.TryAdd(parameterEntry.NameHash, parameterEntry);
             }
 
             int layers = m_Animator.layerCount;
@@ -616,10 +801,7 @@ namespace Unity.Netcode.Components
                 // AnimationMessage.
                 m_AnimationMessage.AnimationStates.Add(new AnimationState());
                 float layerWeightNow = m_Animator.GetLayerWeight(layer);
-                if (layerWeightNow != m_LayerWeights[layer])
-                {
-                    m_LayerWeights[layer] = layerWeightNow;
-                }
+                m_LayerWeights[layer] = layerWeightNow;
             }
 
             // The total initialization size calculated for the m_ParameterWriter write buffer.
@@ -636,11 +818,17 @@ namespace Unity.Netcode.Components
             for (var i = 0; i < parameters.Length; i++)
             {
                 var parameter = parameters[i];
+                var synchronizeParameter = true;
+                if (m_AnimatorParameterEntryTable.TryGetValue(parameter.nameHash, out var entry))
+                {
+                    synchronizeParameter = entry.Synchronize;
+                }
 
                 var cacheParam = new AnimatorParamCache
                 {
                     Type = UnsafeUtility.EnumToInt(parameter.type),
-                    Hash = parameter.nameHash
+                    Hash = parameter.nameHash,
+                    Exclude = !synchronizeParameter
                 };
 
                 unsafe
@@ -658,8 +846,6 @@ namespace Unity.Netcode.Components
                         case AnimatorControllerParameterType.Bool:
                             var valueBool = m_Animator.GetBool(cacheParam.Hash);
                             UnsafeUtility.WriteArrayElement(cacheParam.Value, 0, valueBool);
-                            break;
-                        default:
                             break;
                     }
                 }
@@ -708,6 +894,13 @@ namespace Unity.Netcode.Components
             return m_AnimationMessage;
         }
 
+        internal override void InternalOnNetworkPreSpawn(ref NetworkManager networkManager)
+        {
+            // Save internal state references
+            LocalNetworkManager = networkManager;
+            DistributedAuthorityMode = LocalNetworkManager.DistributedAuthorityMode;
+        }
+
         /// <inheritdoc/>
         public override void OnNetworkSpawn()
         {
@@ -717,12 +910,12 @@ namespace Unity.Netcode.Components
                 NetworkLog.LogWarningServer($"[{gameObject.name}][{nameof(NetworkAnimator)}] {nameof(Animator)} is not assigned! Animation synchronization will not work for this instance!");
             }
 
-            m_ClientSendList = new List<ulong>(128);
-            m_ClientRpcParams = new ClientRpcParams
+            m_TargetGroup = RpcTarget.Group(new List<ulong>(128), RpcTargetUse.Persistent) as IGroupRpcTarget;
+            m_RpcParams = new RpcParams()
             {
-                Send = new ClientRpcSendParams
+                Send = new RpcSendParams()
                 {
-                    TargetClientIds = m_ClientSendList
+                    Target = m_TargetGroup?.Target
                 }
             };
 
@@ -747,6 +940,10 @@ namespace Unity.Netcode.Components
                 m_ParametersToUpdate.Clear();
                 for (int i = 0; i < m_CachedAnimatorParameters.Length; i++)
                 {
+                    if (m_CachedAnimatorParameters[i].Exclude)
+                    {
+                        continue;
+                    }
                     m_ParametersToUpdate.Add(i);
                 }
                 // Write, apply, and serialize
@@ -771,12 +968,12 @@ namespace Unity.Netcode.Components
                     var normalizedTime = synchronizationStateInfo.normalizedTime;
                     var isInTransition = m_Animator.IsInTransition(layer);
 
-                    // Grab one of the available AnimationState entries so we can fill it with the current
+                    // Grab one of the available AnimationState entries, so we can fill it with the current
                     // layer's animation state.
                     var animationState = m_AnimationMessage.AnimationStates[layer];
 
                     // Synchronizing transitions with trigger conditions for late joining clients is now
-                    // handled by cross fading between the late joining client's current layer's AnimationState
+                    // handled by cross-fading between the late joining client's current layer's AnimationState
                     // and the transition's destination AnimationState.
                     if (isInTransition)
                     {
@@ -798,16 +995,14 @@ namespace Unity.Netcode.Components
                         }
                         stateHash = nextState.fullPathHash;
 
-                        // Use the destination state to transition info lookup table to see if this is a transition we can
-                        // synchronize using cross fading
-                        if (m_DestinationStateToTransitioninfo.ContainsKey(layer))
+                        // Check if this transition can be synchronized using cross-fading
+                        if (m_DestinationStateToTransitionInfo.TryGetValue(layer, out var layerTransitions))
                         {
-                            if (m_DestinationStateToTransitioninfo[layer].ContainsKey(nextState.shortNameHash))
+                            if (layerTransitions.TryGetValue(nextState.shortNameHash, out var transitionInfo))
                             {
-                                var destinationInfo = m_DestinationStateToTransitioninfo[layer][nextState.shortNameHash];
-                                stateHash = destinationInfo.OriginatingState;
-                                // Set the destination state to cross fade to from the originating state
-                                animationState.DestinationStateHash = destinationInfo.DestinationState;
+                                stateHash = transitionInfo.OriginatingState;
+                                // Set the destination state to cross-fade to from the originating state
+                                animationState.DestinationStateHash = transitionInfo.DestinationState;
                             }
                         }
                     }
@@ -855,7 +1050,7 @@ namespace Unity.Netcode.Components
         /// <summary>
         /// Checks for animation state changes in:
         /// -Layer weights
-        /// -Cross fades
+        /// -Cross-fades
         /// -Transitions
         /// -Layer AnimationStates
         /// </summary>
@@ -889,7 +1084,7 @@ namespace Unity.Netcode.Components
                 {
                     m_TransitionHash[layer] = nt.fullPathHash;
                     m_AnimationHash[layer] = 0;
-                    // Next state is the destination state for cross fade
+                    // Next state is the destination state for cross-fade
                     animState.DestinationStateHash = nt.fullPathHash;
                     animState.CrossFade = true;
                     animState.Transition = true;
@@ -898,12 +1093,13 @@ namespace Unity.Netcode.Components
                     stateChangeDetected = true;
                     //Debug.Log($"[Cross-Fade] To-Hash: {nt.fullPathHash} | TI-Duration: ({tt.duration}) | TI-Norm: ({tt.normalizedTime}) | From-Hash: ({m_AnimationHash[layer]}) | SI-FPHash: ({st.fullPathHash}) | SI-Norm: ({st.normalizedTime})");
                 }
-                // If we are not transitioned into the "any state" and the animator transition isn't a full path hash (layer to layer) and our pre-built destination state to transition does not contain the
-                // current layer (i.e. transitioning into a state from another layer) =or= we do contain the layer and the layer contains state to transition to is contained within our pre-built destination
-                // state then we can handle this transition as a non-cross fade state transition between layers.
-                // Otherwise, if we don't enter into this then this is a "trigger transition to some state that is now being transitioned back to the Idle state via trigger" or "Dual Triggers" IDLE<-->State.
-                else if (!tt.anyState && tt.fullPathHash != m_TransitionHash[layer] && (!m_DestinationStateToTransitioninfo.ContainsKey(layer) ||
-                    (m_DestinationStateToTransitioninfo.ContainsKey(layer) && m_DestinationStateToTransitioninfo[layer].ContainsKey(nt.fullPathHash))))
+                // Handle as a non-cross-fade transition when:
+                // - not an "any state" transition and this is a new transition on this layer
+                // - the layer is either absent from the lookup table (cross-layer transition) or its destination state is present
+                // Skipping this block means we are in a "dual trigger" scenario where a trigger transitions
+                // to a state that is immediately transitioned back via another trigger (e.g. IDLE <--> State).
+                else if (!tt.anyState && tt.fullPathHash != m_TransitionHash[layer] && (!m_DestinationStateToTransitionInfo.TryGetValue(layer, out var layerTransitions) ||
+                    layerTransitions.ContainsKey(nt.fullPathHash)))
                 {
                     // first time in this transition for this layer
                     m_TransitionHash[layer] = tt.fullPathHash;
@@ -913,7 +1109,7 @@ namespace Unity.Netcode.Components
                     animState.CrossFade = false;
                     animState.Transition = true;
                     animState.NormalizedTime = tt.normalizedTime;
-                    if (m_DestinationStateToTransitioninfo.ContainsKey(layer) && m_DestinationStateToTransitioninfo[layer].ContainsKey(nt.fullPathHash))
+                    if (layerTransitions != null)
                     {
                         animState.DestinationStateHash = nt.fullPathHash;
                     }
@@ -961,7 +1157,7 @@ namespace Unity.Netcode.Components
 
             if (m_Animator.runtimeAnimatorController == null)
             {
-                if (NetworkManager.LogLevel == LogLevel.Developer)
+                if (LocalNetworkManager.LogLevel == LogLevel.Developer)
                 {
                     Debug.LogError($"[{GetType().Name}] Could not find an assigned {nameof(RuntimeAnimatorController)}! Cannot check {nameof(Animator)} for changes in state!");
                 }
@@ -974,43 +1170,39 @@ namespace Unity.Netcode.Components
             // This sends updates only if a layer's state has changed
             for (int layer = 0; layer < m_Animator.layerCount; layer++)
             {
-                AnimatorStateInfo st = m_Animator.GetCurrentAnimatorStateInfo(layer);
-                var totalSpeed = st.speed * st.speedMultiplier;
-                var adjustedNormalizedMaxTime = totalSpeed > 0.0f ? 1.0f / totalSpeed : 0.0f;
                 CheckForStateChange(layer);
             }
 
             // Send an AnimationMessage only if there are dirty AnimationStates to send
             if (m_AnimationMessage.IsDirtyCount > 0)
             {
-                if (NetworkManager.DistributedAuthorityMode)
+                if (DistributedAuthorityMode)
                 {
                     SendAnimStateRpc(m_AnimationMessage);
                 }
-                else
-                if (!IsServer && IsOwner)
+                else if (!IsServer && IsOwner)
                 {
-                    SendAnimStateServerRpc(m_AnimationMessage);
+                    SendServerAnimStateRpc(m_AnimationMessage);
                 }
                 else
                 {
                     // Just notify all remote clients and not the local server
-                    m_ClientSendList.Clear();
-                    foreach (var clientId in NetworkManager.ConnectedClientsIds)
+                    m_TargetGroup.Clear();
+                    foreach (var clientId in LocalNetworkManager.ConnectionManager.ConnectedClientIds)
                     {
-                        if (clientId == NetworkManager.LocalClientId || !NetworkObject.Observers.Contains(clientId))
+                        if (clientId == LocalNetworkManager.LocalClientId || !NetworkObject.Observers.Contains(clientId))
                         {
                             continue;
                         }
-                        m_ClientSendList.Add(clientId);
+                        m_TargetGroup.Add(clientId);
                     }
-                    m_ClientRpcParams.Send.TargetClientIds = m_ClientSendList;
-                    SendAnimStateClientRpc(m_AnimationMessage, m_ClientRpcParams);
+                    m_RpcParams.Send.Target = m_TargetGroup.Target;
+                    SendClientAnimStateRpc(m_AnimationMessage, m_RpcParams);
                 }
             }
         }
 
-        private void SendParametersUpdate(ClientRpcParams clientRpcParams = default, bool sendDirect = false)
+        private void SendParametersUpdate(RpcParams rpcParams = default, bool sendDirect = false)
         {
             WriteParameters(ref m_ParameterWriter);
 
@@ -1018,7 +1210,7 @@ namespace Unity.Netcode.Components
             {
                 Parameters = m_ParameterWriter.ToArray()
             };
-            if (NetworkManager.DistributedAuthorityMode)
+            if (DistributedAuthorityMode)
             {
                 if (IsOwner)
                 {
@@ -1026,24 +1218,24 @@ namespace Unity.Netcode.Components
                 }
                 else
                 {
-                    Debug.LogError($"[{name}][Client-{NetworkManager.LocalClientId}] Attempting to send parameter updates but not the owner!");
+                    Debug.LogError($"[{name}][Client-{LocalNetworkManager.LocalClientId}] Attempting to send parameter updates but not the owner!");
                 }
             }
             else
             {
                 if (!IsServer)
                 {
-                    SendParametersUpdateServerRpc(parametersMessage);
+                    SendServerParametersUpdateRpc(parametersMessage);
                 }
                 else
                 {
                     if (sendDirect)
                     {
-                        SendParametersUpdateClientRpc(parametersMessage, clientRpcParams);
+                        SendClientParametersUpdateRpc(parametersMessage, rpcParams);
                     }
                     else
                     {
-                        m_NetworkAnimatorStateChangeHandler.SendParameterUpdate(parametersMessage, clientRpcParams);
+                        m_NetworkAnimatorStateChangeHandler.SendParameterUpdate(parametersMessage, rpcParams);
                     }
                 }
             }
@@ -1073,6 +1265,11 @@ namespace Unity.Netcode.Components
             for (int i = 0; i < m_CachedAnimatorParameters.Length; i++)
             {
                 ref var cacheValue = ref UnsafeUtility.ArrayElementAsRef<AnimatorParamCache>(m_CachedAnimatorParameters.GetUnsafePtr(), i);
+
+                if (cacheValue.Exclude)
+                {
+                    continue;
+                }
 
                 // If a parameter gets controlled by a curve during runtime after initialization of NetworkAnimator
                 // then ignore changes to this parameter. We are not removing the parameter in the event that
@@ -1117,8 +1314,8 @@ namespace Unity.Netcode.Components
         }
 
         /// <summary>
-        /// Writes all of the Animator's parameters
-        /// This uses the m_ParametersToUpdate list to write out only
+        /// Writes all the Animator's parameters
+        /// This uses the <see cref="m_ParametersToUpdate"/> list to write out only
         /// the parameters that have changed
         /// </summary>
         private unsafe void WriteParameters(ref FastBufferWriter writer)
@@ -1130,6 +1327,13 @@ namespace Unity.Netcode.Components
             foreach (var parameterIndex in m_ParametersToUpdate)
             {
                 ref var cacheValue = ref UnsafeUtility.ArrayElementAsRef<AnimatorParamCache>(m_CachedAnimatorParameters.GetUnsafePtr(), parameterIndex);
+
+                if (cacheValue.Exclude)
+                {
+                    Debug.LogWarning($"Parameter hash:{cacheValue.Hash} should be excluded but is in the parameters to update list when writing parameter values!");
+                    continue;
+                }
+
                 var hash = cacheValue.Hash;
                 BytePacker.WriteValuePacked(writer, (uint)parameterIndex);
                 if (cacheValue.Type == AnimationParamEnumWrapper.AnimatorControllerParameterInt)
@@ -1141,8 +1345,7 @@ namespace Unity.Netcode.Components
                         BytePacker.WriteValuePacked(writer, (uint)valueInt);
                     }
                 }
-                else // Note: Triggers are treated like boolean values
-                if (cacheValue.Type == AnimationParamEnumWrapper.AnimatorControllerParameterBool)
+                else if (cacheValue.Type == AnimationParamEnumWrapper.AnimatorControllerParameterBool)
                 {
                     var valueBool = m_Animator.GetBool(hash);
                     fixed (void* value = cacheValue.Value)
@@ -1174,6 +1377,13 @@ namespace Unity.Netcode.Components
             while (totalParametersRead < totalParametersToRead)
             {
                 ByteUnpacker.ReadValuePacked(reader, out uint parameterIndex);
+
+                // Do bounds check prior to getting the element as a reference at that index.
+                if (parameterIndex >= m_CachedAnimatorParameters.Length)
+                {
+                    NetworkManager.Log.ErrorServer(new Logging.Context(LogLevel.Error, $"[{nameof(NetworkAnimator)}][{name}] Invalid index of {parameterIndex} was received when there are only {m_CachedAnimatorParameters.Length} parameters. Ignoring the remainger of this {nameof(ParametersUpdateMessage)}!"));
+                    return;
+                }
                 ref var cacheValue = ref UnsafeUtility.ArrayElementAsRef<AnimatorParamCache>(m_CachedAnimatorParameters.GetUnsafePtr(), (int)parameterIndex);
                 var hash = cacheValue.Hash;
                 if (cacheValue.Type == AnimationParamEnumWrapper.AnimatorControllerParameterInt)
@@ -1226,7 +1436,7 @@ namespace Unity.Netcode.Components
         /// <summary>
         /// Applies the AnimationState state to the Animator
         /// </summary>
-        internal void UpdateAnimationState(AnimationState animationState)
+        private void UpdateAnimationState(AnimationState animationState)
         {
             // Handle updating layer weights first.
             if (animationState.Layer < m_LayerWeights.Length)
@@ -1248,34 +1458,30 @@ namespace Unity.Netcode.Components
             // If it is a transition, then we are synchronizing transitions in progress when a client late joins
             if (animationState.Transition && !animationState.CrossFade)
             {
-                // We should have all valid entries for any animation state transition update
-                // Verify the AnimationState's assigned Layer exists
-                if (m_DestinationStateToTransitioninfo.ContainsKey(animationState.Layer))
+                // At this point all entries in the lookup table should be valid.
+                // Look up the transition info for this layer and destination state.
+                if (m_DestinationStateToTransitionInfo.TryGetValue(animationState.Layer, out var layerTransitions))
                 {
-                    // Verify the inner-table has the destination AnimationState name hash
-                    if (m_DestinationStateToTransitioninfo[animationState.Layer].ContainsKey(animationState.DestinationStateHash))
+                    if (layerTransitions.TryGetValue(animationState.DestinationStateHash, out var transitionInfo))
                     {
-                        // Make sure we are on the originating/starting state we are going to cross fade into
+                        // Make sure we are on the originating/starting state we are going to cross-fade into
                         if (currentState.shortNameHash == animationState.StateHash)
                         {
-                            // Get the transition state information
-                            var transitionStateInfo = m_DestinationStateToTransitioninfo[animationState.Layer][animationState.DestinationStateHash];
-
-                            // Cross fade from the current to the destination state for the transitions duration while starting at the server's current normalized time of the transition
-                            m_Animator.CrossFade(transitionStateInfo.DestinationState, transitionStateInfo.TransitionDuration, transitionStateInfo.Layer, 0.0f, animationState.NormalizedTime);
+                            // Cross-fade from the current to the destination state for the transitions duration while starting at the server's current normalized time of the transition
+                            m_Animator.CrossFade(transitionInfo.DestinationState, transitionInfo.TransitionDuration, transitionInfo.Layer, 0.0f, animationState.NormalizedTime);
                         }
-                        else if (NetworkManager.LogLevel == LogLevel.Developer)
+                        else if (LocalNetworkManager.LogLevel == LogLevel.Developer)
                         {
                             NetworkLog.LogWarning($"Current State Hash ({currentState.fullPathHash}) != AnimationState.StateHash ({animationState.StateHash})");
                         }
                     }
-                    else if (NetworkManager.LogLevel == LogLevel.Developer)
+                    else if (LocalNetworkManager.LogLevel == LogLevel.Developer)
                     {
                         NetworkLog.LogError($"[DestinationState To Transition Info] Layer ({animationState.Layer}) sub-table does not contain destination state ({animationState.DestinationStateHash})!");
                     }
                 }
                 // For reference, it is valid to have no transition information
-                //else if (NetworkManager.LogLevel == LogLevel.Developer)
+                //else if (m_LocalNetworkManager.LogLevel == LogLevel.Developer)
                 //{
                 //    NetworkLog.LogError($"[DestinationState To Transition Info] Layer ({animationState.Layer}) does not exist!");
                 //}
@@ -1298,8 +1504,8 @@ namespace Unity.Netcode.Components
         /// Server-side animator parameter update request
         /// The server sets its local parameters and then forwards the message to the remaining clients
         /// </summary>
-        [ServerRpc]
-        private unsafe void SendParametersUpdateServerRpc(ParametersUpdateMessage parametersUpdate, ServerRpcParams serverRpcParams = default)
+        [Rpc(SendTo.Server, AllowTargetOverride = true, InvokePermission = RpcInvokePermission.Owner)]
+        private void SendServerParametersUpdateRpc(ParametersUpdateMessage parametersUpdate, RpcParams rpcParams = default)
         {
             if (IsServerAuthoritative())
             {
@@ -1307,34 +1513,37 @@ namespace Unity.Netcode.Components
             }
             else
             {
-                if (serverRpcParams.Receive.SenderClientId != OwnerClientId)
+                if (rpcParams.Receive.SenderClientId != OwnerClientId)
                 {
                     return;
                 }
                 UpdateParameters(ref parametersUpdate);
-                if (NetworkManager.ConnectedClientsIds.Count > (IsHost ? 2 : 1))
+                var connectedClientIds = LocalNetworkManager.ConnectionManager.ConnectedClientIds;
+                if (connectedClientIds.Count <= (IsHost ? 2 : 1))
                 {
-                    m_ClientSendList.Clear();
-                    foreach (var clientId in NetworkManager.ConnectedClientsIds)
-                    {
-                        if (clientId == serverRpcParams.Receive.SenderClientId || clientId == NetworkManager.ServerClientId || !NetworkObject.Observers.Contains(clientId))
-                        {
-                            continue;
-                        }
-                        m_ClientSendList.Add(clientId);
-                    }
-
-                    m_ClientRpcParams.Send.TargetClientIds = m_ClientSendList;
-                    m_NetworkAnimatorStateChangeHandler.SendParameterUpdate(parametersUpdate, m_ClientRpcParams);
+                    return;
                 }
+
+                m_TargetGroup.Clear();
+                foreach (var clientId in connectedClientIds)
+                {
+                    if (clientId == rpcParams.Receive.SenderClientId || clientId == NetworkManager.ServerClientId || !NetworkObject.Observers.Contains(clientId))
+                    {
+                        continue;
+                    }
+                    m_TargetGroup.Add(clientId);
+                }
+
+                m_RpcParams.Send.Target = m_TargetGroup.Target;
+                m_NetworkAnimatorStateChangeHandler.SendParameterUpdate(parametersUpdate, m_RpcParams);
             }
         }
 
         /// <summary>
         /// Distributed Authority: Updates the client's animator's parameters
         /// </summary>
-        [Rpc(SendTo.NotAuthority)]
-        internal void SendParametersUpdateRpc(ParametersUpdateMessage parametersUpdate)
+        [Rpc(SendTo.NotAuthority, AllowTargetOverride = true, InvokePermission = RpcInvokePermission.Owner)]
+        internal void SendParametersUpdateRpc(ParametersUpdateMessage parametersUpdate, RpcParams rpcParams = default)
         {
             m_NetworkAnimatorStateChangeHandler.ProcessParameterUpdate(parametersUpdate);
         }
@@ -1342,11 +1551,11 @@ namespace Unity.Netcode.Components
         /// <summary>
         /// Client-Server: Updates the client's animator's parameters
         /// </summary>
-        [ClientRpc]
-        internal void SendParametersUpdateClientRpc(ParametersUpdateMessage parametersUpdate, ClientRpcParams clientRpcParams = default)
+        [Rpc(SendTo.NotMe, AllowTargetOverride = true)]
+        internal void SendClientParametersUpdateRpc(ParametersUpdateMessage parametersUpdate, RpcParams rpcParams = default)
         {
             var isServerAuthoritative = IsServerAuthoritative();
-            if (!isServerAuthoritative && !IsOwner || isServerAuthoritative)
+            if ((!isServerAuthoritative && !IsOwner) || (isServerAuthoritative && !IsServer))
             {
                 m_NetworkAnimatorStateChangeHandler.ProcessParameterUpdate(parametersUpdate);
             }
@@ -1356,8 +1565,8 @@ namespace Unity.Netcode.Components
         /// Server-side animation state update request
         /// The server sets its local state and then forwards the message to the remaining clients
         /// </summary>
-        [ServerRpc]
-        private void SendAnimStateServerRpc(AnimationMessage animationMessage, ServerRpcParams serverRpcParams = default)
+        [Rpc(SendTo.Server, AllowTargetOverride = true)]
+        private void SendServerAnimStateRpc(AnimationMessage animationMessage, RpcParams rcParams = default)
         {
             if (IsServerAuthoritative())
             {
@@ -1365,7 +1574,7 @@ namespace Unity.Netcode.Components
             }
             else
             {
-                if (serverRpcParams.Receive.SenderClientId != OwnerClientId)
+                if (rcParams.Receive.SenderClientId != OwnerClientId)
                 {
                     return;
                 }
@@ -1375,28 +1584,32 @@ namespace Unity.Netcode.Components
                     UpdateAnimationState(animationState);
                 }
 
-                if (NetworkManager.ConnectedClientsIds.Count > (IsHost ? 2 : 1))
+                var connectedClientIds = LocalNetworkManager.ConnectionManager.ConnectedClientIds;
+                if (connectedClientIds.Count <= (IsHost ? 2 : 1))
                 {
-                    m_ClientSendList.Clear();
-                    foreach (var clientId in NetworkManager.ConnectedClientsIds)
-                    {
-                        if (clientId == serverRpcParams.Receive.SenderClientId || clientId == NetworkManager.ServerClientId || !NetworkObject.Observers.Contains(clientId))
-                        {
-                            continue;
-                        }
-                        m_ClientSendList.Add(clientId);
-                    }
-                    m_ClientRpcParams.Send.TargetClientIds = m_ClientSendList;
-                    m_NetworkAnimatorStateChangeHandler.SendAnimationUpdate(animationMessage, m_ClientRpcParams);
+                    return;
                 }
+
+                m_TargetGroup.Clear();
+
+                foreach (var clientId in connectedClientIds)
+                {
+                    if (clientId == rcParams.Receive.SenderClientId || clientId == NetworkManager.ServerClientId || !NetworkObject.Observers.Contains(clientId))
+                    {
+                        continue;
+                    }
+                    m_TargetGroup.Add(clientId);
+                }
+                m_RpcParams.Send.Target = m_TargetGroup.Target;
+                m_NetworkAnimatorStateChangeHandler.SendAnimationUpdate(animationMessage, m_RpcParams);
             }
         }
 
         /// <summary>
         /// Client-Server: Internally-called RPC client-side receiving function to update animation states
         /// </summary>
-        [ClientRpc]
-        internal void SendAnimStateClientRpc(AnimationMessage animationMessage, ClientRpcParams clientRpcParams = default)
+        [Rpc(SendTo.NotServer, AllowTargetOverride = true)]
+        internal void SendClientAnimStateRpc(AnimationMessage animationMessage, RpcParams rpcParams = default)
         {
             ProcessAnimStates(animationMessage);
         }
@@ -1404,20 +1617,24 @@ namespace Unity.Netcode.Components
         /// <summary>
         /// Distributed Authority: Internally-called RPC non-authority receiving function to update animation states
         /// </summary>
-        [Rpc(SendTo.NotAuthority)]
-        internal void SendAnimStateRpc(AnimationMessage animationMessage)
+        [Rpc(SendTo.NotAuthority, AllowTargetOverride = true, InvokePermission = RpcInvokePermission.Owner)]
+        internal void SendAnimStateRpc(AnimationMessage animationMessage, RpcParams rpcParams = default)
         {
             ProcessAnimStates(animationMessage);
         }
 
+        /// <summary>
+        /// Process incoming <see cref="AnimationMessage"/>.
+        /// </summary>
+        /// <param name="animationMessage">The message to process.</param>
         private void ProcessAnimStates(AnimationMessage animationMessage)
         {
             if (HasAuthority)
             {
-                if (NetworkManager.LogLevel == LogLevel.Developer)
+                if (LocalNetworkManager.LogLevel == LogLevel.Developer)
                 {
-                    var hostOrOwner = NetworkManager.DistributedAuthorityMode ? "Owner" : "Host";
-                    var clientServerOrDAMode = NetworkManager.DistributedAuthorityMode ? "distributed authority" : "client-server";
+                    var hostOrOwner = DistributedAuthorityMode ? "Owner" : "Host";
+                    var clientServerOrDAMode = DistributedAuthorityMode ? "distributed authority" : "client-server";
                     NetworkLog.LogWarning($"Detected the {hostOrOwner} is sending itself animation updates in {clientServerOrDAMode} mode! Please report this issue.");
                 }
                 return;
@@ -1429,19 +1646,17 @@ namespace Unity.Netcode.Components
             }
         }
 
-
-
         /// <summary>
         /// Server-side trigger state update request
         /// The server sets its local state and then forwards the message to the remaining clients
         /// </summary>
-        [ServerRpc]
-        internal void SendAnimTriggerServerRpc(AnimationTriggerMessage animationTriggerMessage, ServerRpcParams serverRpcParams = default)
+        [Rpc(SendTo.Server, AllowTargetOverride = true)]
+        internal void SendServerAnimTriggerRpc(AnimationTriggerMessage animationTriggerMessage, RpcParams rpcParams = default)
         {
             // Ignore if a non-owner sent this.
-            if (serverRpcParams.Receive.SenderClientId != OwnerClientId)
+            if (rpcParams.Receive.SenderClientId != OwnerClientId)
             {
-                if (NetworkManager.LogLevel == LogLevel.Developer)
+                if (LocalNetworkManager.LogLevel == LogLevel.Developer)
                 {
                     NetworkLog.LogWarning($"[Owner Authoritative] Detected the a non-authoritative client is sending the server animation trigger updates. If you recently changed ownership of the {name} object, then this could be the reason.");
                 }
@@ -1451,41 +1666,40 @@ namespace Unity.Netcode.Components
             // set the trigger locally on the server
             InternalSetTrigger(animationTriggerMessage.Hash, animationTriggerMessage.IsTriggerSet);
 
-            m_ClientSendList.Clear();
-            foreach (var clientId in NetworkManager.ConnectedClientsIds)
+            var connectedClientIds = LocalNetworkManager.ConnectionManager.ConnectedClientIds;
+
+            m_TargetGroup.Clear();
+            foreach (var clientId in connectedClientIds)
             {
                 if (clientId == NetworkManager.ServerClientId || !NetworkObject.Observers.Contains(clientId))
                 {
                     continue;
                 }
-                m_ClientSendList.Add(clientId);
+                m_TargetGroup.Add(clientId);
             }
             if (IsServerAuthoritative())
             {
-                m_NetworkAnimatorStateChangeHandler.QueueTriggerUpdateToClient(animationTriggerMessage, m_ClientRpcParams);
+                m_NetworkAnimatorStateChangeHandler.QueueTriggerUpdateToClient(animationTriggerMessage, m_RpcParams);
             }
-            else if (NetworkManager.ConnectedClientsIds.Count > (IsHost ? 2 : 1))
+            else if (connectedClientIds.Count > (IsHost ? 2 : 1))
             {
-                m_ClientSendList.Remove(serverRpcParams.Receive.SenderClientId);
-                m_NetworkAnimatorStateChangeHandler.QueueTriggerUpdateToClient(animationTriggerMessage, m_ClientRpcParams);
+                m_NetworkAnimatorStateChangeHandler.QueueTriggerUpdateToClient(animationTriggerMessage, m_RpcParams);
             }
         }
 
-        /// <summary>
-        /// See above <see cref="m_LastTriggerHash"/>
-        /// </summary>
         private void InternalSetTrigger(int hash, bool isSet = true)
         {
             m_Animator.SetBool(hash, isSet);
         }
 
         /// <summary>
-        /// Distributed Authority: Internally-called RPC client receiving function to update a trigger when the server wants to forward
-        ///  a trigger to a client
+        /// Distributed Authority: Internally-called RPC client receiving function to update a trigger when the authority wants
+        /// to forward a trigger to a client
         /// </summary>
         /// <param name="animationTriggerMessage">the payload containing the trigger data to apply</param>
-        [Rpc(SendTo.NotAuthority)]
-        internal void SendAnimTriggerRpc(AnimationTriggerMessage animationTriggerMessage)
+        /// <param name="rpcParams">Defined as it's used to send the RPC to be invoked on this client</param>
+        [Rpc(SendTo.NotAuthority, AllowTargetOverride = true, InvokePermission = RpcInvokePermission.Owner)]
+        internal void SendAnimTriggerRpc(AnimationTriggerMessage animationTriggerMessage, RpcParams rpcParams = default)
         {
             InternalSetTrigger(animationTriggerMessage.Hash, animationTriggerMessage.IsTriggerSet);
         }
@@ -1495,9 +1709,9 @@ namespace Unity.Netcode.Components
         ///  a trigger to a client
         /// </summary>
         /// <param name="animationTriggerMessage">the payload containing the trigger data to apply</param>
-        /// <param name="clientRpcParams">unused</param>
-        [ClientRpc]
-        internal void SendAnimTriggerClientRpc(AnimationTriggerMessage animationTriggerMessage, ClientRpcParams clientRpcParams = default)
+        /// <param name="rpcParams"> used to send the RPC to be invoked on this client</param>
+        [Rpc(SendTo.NotServer, AllowTargetOverride = true)]
+        internal void SendClientAnimTriggerRpc(AnimationTriggerMessage animationTriggerMessage, RpcParams rpcParams = default)
         {
             InternalSetTrigger(animationTriggerMessage.Hash, animationTriggerMessage.IsTriggerSet);
         }
@@ -1529,25 +1743,20 @@ namespace Unity.Netcode.Components
             // will happen when SendAnimTriggerClientRpc is called.  For a client owner, we call the
             // SendAnimTriggerServerRpc and then trigger locally when running in owner authority mode.
             var animTriggerMessage = new AnimationTriggerMessage() { Hash = hash, IsTriggerSet = setTrigger };
-            if (NetworkManager.DistributedAuthorityMode && HasAuthority)
+            if (DistributedAuthorityMode && HasAuthority)
             {
                 m_NetworkAnimatorStateChangeHandler.QueueTriggerUpdateToClient(animTriggerMessage);
                 InternalSetTrigger(hash, setTrigger);
             }
-            else if (!NetworkManager.DistributedAuthorityMode && (IsOwner || IsServer))
+            else if (!DistributedAuthorityMode && (IsOwner || IsServer))
             {
                 if (IsServer)
                 {
-                    /// <see cref="UpdatePendingTriggerStates"/> as to why we queue
                     m_NetworkAnimatorStateChangeHandler.QueueTriggerUpdateToClient(animTriggerMessage);
-                    if (!IsHost)
-                    {
-                        InternalSetTrigger(hash, setTrigger);
-                    }
+                    InternalSetTrigger(hash, setTrigger);
                 }
                 else
                 {
-                    /// <see cref="UpdatePendingTriggerStates"/> as to why we queue
                     m_NetworkAnimatorStateChangeHandler.QueueTriggerUpdateToServer(animTriggerMessage);
                     if (!IsServerAuthoritative())
                     {
@@ -1571,6 +1780,39 @@ namespace Unity.Netcode.Components
         public void ResetTrigger(int hash)
         {
             SetTrigger(hash, false);
+        }
+
+        /// <summary>
+        /// Allows for the enabling or disabling the synchronization of a specific <see cref="UnityEngine.Animator"/> parameter.
+        /// </summary>
+        /// <param name="parameterName">The <see cref="string"/> name of the parameter.</param>
+        /// <param name="isEnabled">Whether to enable or disable the synchronization of the parameter.</param>
+        public void EnableParameterSynchronization(string parameterName, bool isEnabled)
+        {
+            EnableParameterSynchronization(Animator.StringToHash(parameterName), isEnabled);
+        }
+
+        /// <summary>
+        /// Allows for the enabling or disabling the synchronization of a specific <see cref="UnityEngine.Animator"/> parameter.
+        /// </summary>
+        /// <param name="parameterNameHash">The hash value (from using <see cref="Animator.StringToHash(string)"/>) of the parameter name.</param>
+        /// <param name="isEnabled">Whether to enable or disable the synchronization of the parameter.</param>
+        public void EnableParameterSynchronization(int parameterNameHash, bool isEnabled)
+        {
+            var serverAuthoritative = OnIsServerAuthoritative();
+            if (!IsSpawned || serverAuthoritative && IsServer || !serverAuthoritative && IsOwner)
+            {
+                for (int i = 0; i < m_CachedAnimatorParameters.Length; i++)
+                {
+                    var cachedParameter = m_CachedAnimatorParameters[i];
+                    if (cachedParameter.Hash == parameterNameHash)
+                    {
+                        cachedParameter.Exclude = !isEnabled;
+                        m_CachedAnimatorParameters[i] = cachedParameter;
+                        break;
+                    }
+                }
+            }
         }
     }
 }

@@ -22,6 +22,12 @@ namespace TestProject.RuntimeTests
         private bool m_IncludeSceneVerificationHandler;
         private bool m_RuntimeSceneWasExcludedFromSynch;
 
+        // TODO: [CmbServiceTests] Adapt to run with the service
+        protected override bool UseCMBService()
+        {
+            return false;
+        }
+
         private List<ClientSceneVerificationHandler> m_ClientSceneVerifiers = new List<ClientSceneVerificationHandler>();
         public ClientSynchronizationValidationTest(NetworkTopologyTypes networkTopologyType, HostOrServer hostOrServer) : base(networkTopologyType, hostOrServer) { }
 
@@ -104,7 +110,7 @@ namespace TestProject.RuntimeTests
                 foreach (var spawnedObjectEntry in m_ServerNetworkManager.SpawnManager.SpawnedObjects)
                 {
                     var networkObject = spawnedObjectEntry.Value;
-                    if (!networkObject.IsSceneObject.Value)
+                    if (!networkObject.InScenePlaced)
                     {
                         continue;
                     }
@@ -132,7 +138,7 @@ namespace TestProject.RuntimeTests
             foreach (var spawnedObjectEntry in m_ServerNetworkManager.SpawnManager.SpawnedObjects)
             {
                 var networkObject = spawnedObjectEntry.Value;
-                if (!networkObject.IsSceneObject.Value)
+                if (!networkObject.InScenePlaced)
                 {
                     continue;
                 }

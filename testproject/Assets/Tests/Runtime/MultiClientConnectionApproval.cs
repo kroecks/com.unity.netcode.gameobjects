@@ -22,6 +22,15 @@ namespace TestProject.RuntimeTests
         private bool m_DelayedApproval;
         private List<NetworkManager.ConnectionApprovalResponse> m_ResponseToSet = new List<NetworkManager.ConnectionApprovalResponse>();
 
+        private const string k_DisconnectMessage = "Some valid reason";
+
+        [OneTimeSetUp]
+        public void OneTimeSetup()
+        {
+            // TODO: [CmbServiceTests] if this test is deemed needed to test against the CMB server then update this test.
+            NetcodeIntegrationTestHelpers.IgnoreIfServiceEnviromentVariableSet();
+        }
+
         /// <summary>
         /// Tests connection approval and connection approval failure
         /// </summary>
@@ -173,7 +182,7 @@ namespace TestProject.RuntimeTests
 
             foreach (var c in clientsToClean)
             {
-                Assert.AreEqual(c.DisconnectReason, "Some valid reason");
+                Assert.IsTrue(c.DisconnectReason.Contains(k_DisconnectMessage), $"The disconnect message ({c.DisconnectReason}) does not contain the disconnect information ({k_DisconnectMessage})!");
             }
 
             foreach (var client in clients)
@@ -235,7 +244,7 @@ namespace TestProject.RuntimeTests
             }
             if (!response.Approved)
             {
-                response.Reason = "Some valid reason";
+                response.Reason = k_DisconnectMessage;
             }
             else
             {

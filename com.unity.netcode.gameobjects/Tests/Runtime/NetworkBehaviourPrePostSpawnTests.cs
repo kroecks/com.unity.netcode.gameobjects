@@ -12,6 +12,12 @@ namespace Unity.Netcode.RuntimeTests
     {
         protected override int NumberOfClients => 0;
 
+        // TODO: [CmbServiceTests] Adapt to run with the service
+        protected override bool UseCMBService()
+        {
+            return false;
+        }
+
         private bool m_AllowServerToStart;
 
         private GameObject m_PrePostSpawnObject;
@@ -37,6 +43,8 @@ namespace Unity.Netcode.RuntimeTests
 
             protected override void OnNetworkPreSpawn(ref NetworkManager networkManager)
             {
+                Assert.That(NetworkObject.NetworkManagerOwner, Is.Not.Null, "NetworkManagerOwner should be set before calling OnNetworkPreSpawn");
+
                 OnNetworkPreSpawnCalled = true;
                 // If we are the server, then set the randomly generated value (1-200).
                 // Otherwise, just set the value to 0.

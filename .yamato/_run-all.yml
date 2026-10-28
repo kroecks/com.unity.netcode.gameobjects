@@ -15,8 +15,10 @@
 run_quick_checks:
   name: Run Quick Initial Checks
   dependencies:
-    - .yamato/package-pack.yml#package_pack_-_ngo_ubuntu
-    - .yamato/project-standards.yml#standards_ubuntu_testproject_trunk
+    # Ensure the code is running to our current standards
+    - .yamato/project-standards.yml#standards_ubuntu_testproject_{{ validation_editors.standards }}
+    # This is needed for most of the jobs to execute tests + it runs xray PVP checks (all fast checks)
+    - .yamato/package-pack.yml#package_pack_-_ngo_win
 
 
 # Runs all package tests
@@ -25,27 +27,25 @@ run_all_package_tests:
   dependencies:
 {% for platform in test_platforms.desktop -%}
 {% for editor in validation_editors.all -%}
-    - .yamato/package-tests.yml#package_test_-_ngo_{{ editor }}_{{ platform.name }}
+    - .yamato/package-tests.yml#package_test_-_ngo_{{ platform.name }}_{{ editor }}
 {% endfor -%}
 {% endfor -%}
 
 
-# Runs all package tests on trunk editor
-run_all_package_tests_trunk:
-  name: Run All Package Tests [Trunk only]
+# Runs all package tests on latest supported editor
+run_all_package_tests_{{ validation_editors.latest }}:
+  name: Run All Package Tests [{{ validation_editors.latest }} only]
   dependencies:
 {% for platform in test_platforms.desktop -%}
-{% for editor in validation_editors.default -%}
-    - .yamato/package-tests.yml#package_test_-_ngo_{{ editor }}_{{ platform.name }}
-{% endfor -%}
+    - .yamato/package-tests.yml#package_test_-_ngo_{{ platform.name }}_{{ validation_editors.latest }}
 {% endfor -%}
 
-# Runs all package tests on mimimum supported editor (6000.0 in case of NGOv2.X)
-run_all_package_tests_6000:
-  name: Run All Package Tests [6000.0]
+# Runs all package tests on minimal supported editor
+run_all_package_tests_{{ validation_editors.minimal }}:
+  name: Run All Package Tests [{{ validation_editors.minimal }}]
   dependencies:
 {% for platform in test_platforms.desktop -%}
-    - .yamato/package-tests.yml#package_test_-_ngo_6000.0_{{ platform.name }}
+    - .yamato/package-tests.yml#package_test_-_ngo_{{ platform.name }}_{{ validation_editors.minimal }}
 {% endfor -%}
 
 
@@ -64,28 +64,26 @@ run_all_project_tests:
 {% endfor -%}
 
 
-# Runs all projects tests on trunk editor
-run_all_project_tests_trunk:
-  name: Run All Project Tests [Trunk only]
+# Runs all projects tests on latest supported editor
+run_all_project_tests_{{ validation_editors.latest }}:
+  name: Run All Project Tests [{{ validation_editors.latest }} only]
   dependencies:
 {% for project in projects.all -%}
 {% if project.has_tests == "true" -%}
 {% for platform in test_platforms.desktop -%}
-{% for editor in validation_editors.default -%}
-    - .yamato/project-tests.yml#test_{{ project.name }}_{{ platform.name }}_{{ editor }}
-{% endfor -%}
+    - .yamato/project-tests.yml#test_{{ project.name }}_{{ platform.name }}_{{ validation_editors.latest }}
 {% endfor -%}
 {% endif -%}
 {% endfor -%}
 
-# Runs all projects tests on mimimum supported editor (6000.0 in case of NGOv2.X)
-run_all_project_tests_6000:
-  name: Run All Project Tests [6000.0]
+# Runs all projects tests on minimal supported editor
+run_all_project_tests_{{ validation_editors.minimal }}:
+  name: Run All Project Tests [{{ validation_editors.minimal }}]
   dependencies:
 {% for project in projects.all -%}
 {% if project.has_tests == "true" -%}
 {% for platform in test_platforms.desktop -%}
-    - .yamato/project-tests.yml#test_{{ project.name }}_{{ platform.name }}_6000.0
+    - .yamato/project-tests.yml#test_{{ project.name }}_{{ platform.name }}_{{ validation_editors.minimal }}
 {% endfor -%}
 {% endif -%}
 {% endfor -%}
@@ -97,7 +95,7 @@ run_all_projects_standards:
   dependencies:
 {% for platform in test_platforms.default -%}
 {% for project in projects.all -%}
-{% for editor in validation_editors.default -%}
+{% for editor in validation_editors.standards -%}
     - .yamato/project-standards.yml#standards_{{ platform.name }}_{{ project.name }}_{{ editor }}
 {% endfor -%}
 {% endfor -%}
@@ -110,39 +108,32 @@ run_all_webgl_builds:
   dependencies:
 {% for project in projects.default -%}
 {% for platform in test_platforms.desktop -%}
-{% if platform.name != "mac" -%} # There is an error about "Light baking could not be started because no valid OpenCL device could be found". Tracked in MTT-11726
 {% for editor in validation_editors.all -%}
     - .yamato/webgl-build.yml#webgl_build_{{ project.name }}_{{ platform.name }}_{{ editor }}
 {% endfor -%}
-{% endif -%}
 {% endfor -%}
 {% endfor -%}
 
 
-# Runs all WebGL builds on trunk editor
-run_all_webgl_builds_trunk:
-  name: Run All WebGl Build [Trunk only]
+# Runs all WebGL builds on latest supported editor
+run_all_webgl_builds_{{ validation_editors.latest }}:
+  name: Run All WebGl Build [{{ validation_editors.latest }} only]
   dependencies:
 {% for project in projects.default -%}
 {% for platform in test_platforms.desktop -%}
-{% if platform.name != "mac" -%} # There is an error about "Light baking could not be started because no valid OpenCL device could be found". Tracked in MTT-11726
-{% for editor in validation_editors.default -%}
-    - .yamato/webgl-build.yml#webgl_build_{{ project.name }}_{{ platform.name }}_{{ editor }}
-{% endfor -%}
-{% endif -%}
+    - .yamato/webgl-build.yml#webgl_build_{{ project.name }}_{{ platform.name }}_{{ validation_editors.latest }}
 {% endfor -%}
 {% endfor -%}
 
-# Runs all WebGL builds on 6000.0 editor
-run_all_webgl_builds_6000:
-  name: Run All WebGl Build [6000.0]
+
+# Runs all WebGL builds on minimal supported editor
+run_all_webgl_builds_{{ validation_editors.minimal }}:
+  name: Run All WebGl Build [{{ validation_editors.minimal }}]
   dependencies:
 {% for project in projects.default -%}
-{% if platform.name != "mac" -%} # There is an error about "Light baking could not be started because no valid OpenCL device could be found". Tracked in MTT-11726
 {% for platform in test_platforms.desktop -%}
-    - .yamato/webgl-build.yml#webgl_build_{{ project.name }}_{{ platform.name }}_6000.0
+    - .yamato/webgl-build.yml#webgl_build_{{ project.name }}_{{ platform.name }}_{{ validation_editors.minimal }}
 {% endfor -%}
-{% endif -%}
 {% endfor -%}
 
 
@@ -161,28 +152,26 @@ run_all_project_tests_desktop_standalone:
 {% endfor -%}
 
 
-# Runs all Desktop tests on trunk editor
-run_all_project_tests_desktop_standalone_trunk:
-  name: Run All Standalone Tests - Desktop [Trunk only]
+# Runs all Desktop tests on latest supported editor
+run_all_project_tests_desktop_standalone_{{ validation_editors.latest }}:
+  name: Run All Standalone Tests - Desktop [{{ validation_editors.latest }} only]
   dependencies:
 {% for project in projects.default -%}
 {% for platform in test_platforms.desktop -%}
-{% for editor in validation_editors.default -%}
 {% for backend in scripting_backends -%}
-    - .yamato/desktop-standalone-tests.yml#desktop_standalone_test_{{ project.name }}_{{ platform.name }}_{{ backend }}_{{ editor }}
-{% endfor -%}
+    - .yamato/desktop-standalone-tests.yml#desktop_standalone_test_{{ project.name }}_{{ platform.name }}_{{ backend }}_{{ validation_editors.latest }}
 {% endfor -%}
 {% endfor -%}
 {% endfor -%}
 
-# Runs all Desktop tests on mimimum supported editor (6000.0 in case of NGOv2.X)
-run_all_project_tests_desktop_standalone_6000:
-  name: Run All Standalone Tests - Desktop [6000.0]
+# Runs all Desktop tests on minimal supported editor
+run_all_project_tests_desktop_standalone_{{ validation_editors.minimal }}:
+  name: Run All Standalone Tests - Desktop [{{ validation_editors.minimal }}]
   dependencies:
 {% for project in projects.default -%}
 {% for platform in test_platforms.desktop -%}
 {% for backend in scripting_backends -%}
-    - .yamato/desktop-standalone-tests.yml#desktop_standalone_test_{{ project.name }}_{{ platform.name }}_{{ backend }}_6000.0
+    - .yamato/desktop-standalone-tests.yml#desktop_standalone_test_{{ project.name }}_{{ platform.name }}_{{ backend }}_{{ validation_editors.minimal }}
 {% endfor -%}
 {% endfor -%}
 {% endfor -%}
@@ -200,25 +189,24 @@ run_all_project_tests_mobile_standalone:
 {% endfor -%}
 
 
-# Runs all Mobile tests on trunk editor
-run_all_project_tests_mobile_standalone_trunk:
-  name: Run All Standalone Tests - Mobile [Trunk only]
+# Runs all Mobile tests on latest supported editor
+run_all_project_tests_mobile_standalone_{{ validation_editors.latest }}:
+  name: Run All Standalone Tests - Mobile [{{ validation_editors.latest }} only]
   dependencies:
 {% for project in projects.default -%}
 {% for platform in test_platforms.mobile_test -%}
-{% for editor in validation_editors.default -%}
-    - .yamato/mobile-standalone-test.yml#mobile_standalone_test_{{ project.name }}_{{ platform.name }}_{{ editor }}
-{% endfor -%}
+    - .yamato/mobile-standalone-test.yml#mobile_standalone_test_{{ project.name }}_{{ platform.name }}_{{ validation_editors.latest }}
 {% endfor -%}
 {% endfor -%}
 
-# Runs all Mobile tests on mimimum supported editor (6000.0 in case of NGOv2.X)
-run_all_project_tests_mobile_standalone_6000:
-  name: Run All Standalone Tests - Mobile [6000.0]
+
+# Runs all Mobile tests on minimal supported editor
+run_all_project_tests_mobile_standalone_{{ validation_editors.minimal }}:
+  name: Run All Standalone Tests - Mobile [{{ validation_editors.minimal }}]
   dependencies:
 {% for project in projects.default -%}
 {% for platform in test_platforms.mobile_test -%}
-    - .yamato/mobile-standalone-test.yml#mobile_standalone_test_{{ project.name }}_{{ platform.name }}_6000.0
+    - .yamato/mobile-standalone-test.yml#mobile_standalone_test_{{ project.name }}_{{ platform.name }}_{{ validation_editors.minimal }}
 {% endfor -%}
 {% endfor -%}
 
@@ -236,24 +224,61 @@ run_all_project_tests_console_standalone:
 {% endfor -%}
 
 
-# Runs all Console tests on trunk editor
-run_all_project_tests_console_standalone_trunk:
-  name: Run All Standalone Tests - Console [Trunk only]
+# Runs all Console tests on latest supported editor
+run_all_project_tests_console_standalone_{{ validation_editors.latest }}:
+  name: Run All Standalone Tests - Console [{{ validation_editors.latest }} only]
   dependencies:
 {% for project in projects.default -%}
 {% for platform in test_platforms.console_test -%}
-{% for editor in validation_editors.default -%}
-    - .yamato/console-standalone-test.yml#console_standalone_test_{{ project.name }}_{{ platform.name }}_{{ editor }}
+    - .yamato/console-standalone-test.yml#console_standalone_test_{{ project.name }}_{{ platform.name }}_{{ validation_editors.latest }}
+{% endfor -%}
+{% endfor -%}
+
+# Runs all Console tests on minimal supported editor
+run_all_project_tests_console_standalone_{{ validation_editors.minimal }}:
+  name: Run All Standalone Tests - Console [{{ validation_editors.minimal }}]
+  dependencies:
+{% for project in projects.default -%}
+{% for platform in test_platforms.console_test -%}
+    - .yamato/console-standalone-test.yml#console_standalone_test_{{ project.name }}_{{ platform.name }}_{{ validation_editors.minimal }}
+{% endfor -%}
+{% endfor -%}
+
+
+# Runs all CMB service tests
+run_all_project_tests_cmb_service:
+  name: Run All CMB Service Tests
+  dependencies:
+{% for project in projects.default -%}
+{% for platform in test_platforms.default -%}
+{% for editor in validation_editors.all -%}
+{% for backend in scripting_backends -%}
+    - .yamato/cmb-service-standalone-tests.yml#cmb_service_standalone_test_{{ project.name }}_{{ platform.name }}_{{ backend }}_{{ editor }}
+{% endfor -%}
 {% endfor -%}
 {% endfor -%}
 {% endfor -%}
 
-# Runs all Console tests on mimimum supported editor (6000.0 in case of NGOv2.X)
-run_all_project_tests_console_standalone_6000:
-  name: Run All Standalone Tests - Console [6000.0]
+# Runs all CMB service tests on latest supported editor
+run_all_project_tests_cmb_service_{{ validation_editors.latest }}:
+  name: Run All CMB Service Tests [{{ validation_editors.latest }} only]
   dependencies:
 {% for project in projects.default -%}
-{% for platform in test_platforms.console_test -%}
-    - .yamato/console-standalone-test.yml#console_standalone_test_{{ project.name }}_{{ platform.name }}_6000.0
+{% for platform in test_platforms.default -%}
+{% for backend in scripting_backends -%}
+    - .yamato/cmb-service-standalone-tests.yml#cmb_service_standalone_test_{{ project.name }}_{{ platform.name }}_{{ backend }}_{{ validation_editors.latest }}
+{% endfor -%}
+{% endfor -%}
+{% endfor -%}
+
+# Runs all CMB service tests on minimal supported editor
+run_all_project_tests_cmb_service_{{ validation_editors.minimal }}:
+  name: Run All CMB Service Tests [{{ validation_editors.minimal }}]
+  dependencies:
+{% for project in projects.default -%}
+{% for platform in test_platforms.default -%}
+{% for backend in scripting_backends -%}
+    - .yamato/cmb-service-standalone-tests.yml#cmb_service_standalone_test_{{ project.name }}_{{ platform.name }}_{{ backend }}_{{ validation_editors.minimal }}
+{% endfor -%}
 {% endfor -%}
 {% endfor -%}

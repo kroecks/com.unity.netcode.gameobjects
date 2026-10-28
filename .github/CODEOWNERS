@@ -9,3 +9,5 @@ AssemblyInfo.cs @NoelStephensUnity @EmandM @Unity-Technologies/netcode-qa
 .gitignore @NoelStephensUnity @EmandM @Unity-Technologies/netcode-qa
 .github/ @NoelStephensUnity @EmandM @Unity-Technologies/netcode-qa
 .yamato/ @NoelStephensUnity @EmandM @Unity-Technologies/netcode-qa
+com.unity.netcode.gameobjects/Documentation*/ @jabbacakes
+com.unity.netcode.gameobjects/Runtime/Transports/UTP/ @simon-lemay-unity

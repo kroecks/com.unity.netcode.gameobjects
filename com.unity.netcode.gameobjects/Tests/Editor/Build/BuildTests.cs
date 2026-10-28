@@ -1,4 +1,4 @@
-#if !MULTIPLAYER_TOOLS
+#if !NGO_EXCLUDE_HEAVY_TESTS
 using System.IO;
 using System.Reflection;
 using NUnit.Framework;
@@ -12,6 +12,8 @@ namespace Unity.Netcode.EditorTests
     {
         public const string DefaultBuildScenePath = "Tests/Editor/Build/BuildTestScene.unity";
 
+        // Increased the Build test timeout from 3 to 10 minutes.
+        [Timeout(900000)]
         [Test]
         public void BasicBuildTest()
         {

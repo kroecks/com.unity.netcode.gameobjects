@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using NUnit.Framework;
+using Unity.Netcode.TestHelpers.Runtime;
 using Unity.Netcode.Transports.UTP;
 using Unity.Networking.Transport;
 using UnityEngine;
@@ -34,6 +35,13 @@ namespace Unity.Netcode.RuntimeTests
         private UnityTransport m_Server, m_Client1, m_Client2;
         private List<TransportEvent> m_ServerEvents, m_Client1Events, m_Client2Events;
 
+        [OneTimeSetUp]
+        public void OneTimeSetup()
+        {
+            // TODO: [CmbServiceTests] if this test is deemed needed to test against the CMB server then update this test.
+            NetcodeIntegrationTestHelpers.IgnoreIfServiceEnviromentVariableSet();
+        }
+
         [UnityTearDown]
         public IEnumerator Cleanup()
         {
@@ -43,6 +51,7 @@ namespace Unity.Netcode.RuntimeTests
 
                 // Need to destroy the GameObject (all assigned components will get destroyed too)
                 UnityEngine.Object.DestroyImmediate(m_Server.gameObject);
+                m_Server = null;
             }
 
             if (m_Client1)
@@ -51,6 +60,7 @@ namespace Unity.Netcode.RuntimeTests
 
                 // Need to destroy the GameObject (all assigned components will get destroyed too)
                 UnityEngine.Object.DestroyImmediate(m_Client1.gameObject);
+                m_Client1 = null;
             }
 
             if (m_Client2)
@@ -59,6 +69,7 @@ namespace Unity.Netcode.RuntimeTests
 
                 // Need to destroy the GameObject (all assigned components will get destroyed too)
                 UnityEngine.Object.DestroyImmediate(m_Client2.gameObject);
+                m_Client2 = null;
             }
             m_ServerEvents?.Clear();
             m_Client1Events?.Clear();
@@ -176,6 +187,86 @@ namespace Unity.Netcode.RuntimeTests
             }
 
             yield return null;
+        }
+
+        [UnityTest]
+        public IEnumerator VeryLargeDisconnectTimeout()
+        {
+            // The calculation will never be lower than the UnityTransport.InitialMaxPayloadSize
+            // We want to send a message larger than that size to ensure the maximum is high enough
+            var payloadSize = UnityTransport.InitialMaxPayloadSize * 2;
+
+            var disconnectTimeout = int.MaxValue;
+
+            InitializeTransport(out m_Server, out m_ServerEvents, payloadSize, disconnectTimeout: disconnectTimeout);
+            InitializeTransport(out m_Client1, out m_Client1Events, payloadSize, disconnectTimeout: disconnectTimeout);
+            Assert.That(m_Server.DisconnectTimeoutMS, Is.EqualTo(disconnectTimeout));
+            Assert.That(m_Client1.DisconnectTimeoutMS, Is.EqualTo(disconnectTimeout));
+
+            m_Server.StartServer();
+            m_Client1.StartClient();
+
+            yield return WaitForNetworkEvent(NetworkEvent.Connect, m_Client1Events);
+
+            var payloadData = new byte[payloadSize];
+            for (int i = 0; i < payloadData.Length; i++)
+            {
+                payloadData[i] = (byte)i;
+            }
+
+            var payload = new ArraySegment<byte>(payloadData);
+            m_Client1.Send(m_Client1.ServerClientId, payload, NetworkDelivery.Reliable);
+
+            yield return WaitForNetworkEvent(NetworkEvent.Data, m_ServerEvents, MaxNetworkEventWaitTime * 4);
+
+            Assert.AreEqual(payloadSize, m_ServerEvents[1].Data.Count);
+
+            var receivedArray = m_ServerEvents[1].Data.Array;
+            var receivedArrayOffset = m_ServerEvents[1].Data.Offset;
+            for (int i = 0; i < payloadSize; i++)
+            {
+                Assert.AreEqual(payloadData[i], receivedArray[receivedArrayOffset + i]);
+            }
+        }
+
+        [UnityTest]
+        public IEnumerator ZeroDisconnectTimeoutSetToZero()
+        {
+            // The calculation will never be lower than the UnityTransport.InitialMaxPayloadSize
+            // We want to send a message larger than that size to ensure the maximum is high enough
+            var payloadSize = UnityTransport.InitialMaxPayloadSize * 2;
+
+            var disconnectTimeout = 0;
+
+            InitializeTransport(out m_Server, out m_ServerEvents, payloadSize, disconnectTimeout: disconnectTimeout);
+            InitializeTransport(out m_Client1, out m_Client1Events, payloadSize, disconnectTimeout: disconnectTimeout);
+            Assert.That(m_Server.DisconnectTimeoutMS, Is.EqualTo(disconnectTimeout));
+            Assert.That(m_Client1.DisconnectTimeoutMS, Is.EqualTo(disconnectTimeout));
+
+            m_Server.StartServer();
+            m_Client1.StartClient();
+
+            yield return WaitForNetworkEvent(NetworkEvent.Connect, m_Client1Events);
+
+            var payloadData = new byte[payloadSize];
+            for (int i = 0; i < payloadData.Length; i++)
+            {
+                payloadData[i] = (byte)i;
+            }
+
+            var payload = new ArraySegment<byte>(payloadData);
+            m_Client1.Send(m_Client1.ServerClientId, payload, NetworkDelivery.Reliable);
+
+            yield return WaitForNetworkEvent(NetworkEvent.Data, m_ServerEvents, MaxNetworkEventWaitTime * 4);
+
+            Assert.AreEqual(payloadSize, m_ServerEvents[1].Data.Count);
+
+            var receivedArray = m_ServerEvents[1].Data.Array;
+            var receivedArrayOffset = m_ServerEvents[1].Data.Offset;
+            for (int i = 0; i < payloadSize; i++)
+            {
+                Assert.AreEqual(payloadData[i], receivedArray[receivedArrayOffset + i]);
+            }
         }
 
         // Check making multiple sends to a client in a single frame.
@@ -309,7 +400,7 @@ namespace Unity.Netcode.RuntimeTests
             m_Server.StartServer();
             m_Client1.StartClient();
 
-            yield return WaitForNetworkEvent(NetworkEvent.Connect, m_Client1Events);
+            yield return WaitForNetworkEvent(NetworkEvent.Connect, m_Client1Events, 5.0f);
 
             var serverClientId = m_Client1.ServerClientId;
 

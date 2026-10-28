@@ -38,6 +38,72 @@ namespace Unity.Netcode.RuntimeTests
         }
 
         /// <summary>
+        /// This validates an issue where if multiple state updates are received in a single frame
+        /// and interpolation is disabled, only the last state udpate processed gets applied.
+        /// </summary>
+        [Test]
+        public void TestMultipleStateSynchronization([Values] bool isLocal, [Values] bool timeTravelBetweenStateUpdates)
+        {
+            // Assure no new state updates are pushed.
+            TimeTravel(0.5f, 60);
+
+            // Disable interpolation and set world or local space
+            m_NonAuthoritativeTransform.Interpolate = false;
+            m_NonAuthoritativeTransform.InLocalSpace = isLocal;
+
+            // Get the non-authority's state
+            var localState = m_NonAuthoritativeTransform.LocalAuthoritativeNetworkState;
+
+            // Assure this is not set to avoid a false positive result with teleporting
+            localState.FlagStates.IsTeleportingNextFrame = false;
+
+            // Simulate a state update
+            localState.FlagStates.UseInterpolation = false;
+            localState.CurrentPosition = new Vector3(5.0f, 0.0f, 0.0f);
+            localState.FlagStates.SetHasPosition(NetworkTransform.Axis.X, true);
+            localState.PositionX = 5.0f;
+            localState.NetworkTick++;
+
+            var lastStateTick = localState.NetworkTick;
+            // Apply the simualted state update to the non-authority instance
+            m_NonAuthoritativeTransform.ApplyUpdatedState(localState);
+            // Simulate both having time between state updates and having state updates delivered back to back on the same frame
+            if (timeTravelBetweenStateUpdates)
+            {
+                TimeTravelAdvanceTick();
+            }
+
+            // Validate the state update was applied
+            var xValue = isLocal ? m_NonAuthoritativeTransform.transform.localPosition.x : m_NonAuthoritativeTransform.transform.position.x;
+            Assert.IsTrue(xValue == 5.0f, $"[Test1][IsLocal: {isLocal}] X axis ({xValue}) does not equal 5.0f!");
+
+
+            // Get the non-authority state
+            localState = m_NonAuthoritativeTransform.LocalAuthoritativeNetworkState;
+
+            //Assure we have not received any state updates from the authority that could skew the test
+            Assert.IsTrue(localState.NetworkTick == lastStateTick, $"Previous Non-authority state tick was {lastStateTick} but is now {localState.NetworkTick}. Authority pushed a state update.");
+
+            // Simualate a 2nd state update on a different position axis
+            localState.FlagStates.SetHasPosition(NetworkTransform.Axis.X, false);
+            localState.FlagStates.SetHasPosition(NetworkTransform.Axis.Z, true);
+            localState.PositionZ = -5.0f;
+            localState.NetworkTick++;
+            m_NonAuthoritativeTransform.ApplyUpdatedState(localState);
+            // Simulate both having time between state updates and having state updates delivered back to back on the same frame
+            if (timeTravelBetweenStateUpdates)
+            {
+                TimeTravelAdvanceTick();
+            }
+            var zValue = isLocal ? m_NonAuthoritativeTransform.transform.localPosition.z : m_NonAuthoritativeTransform.transform.position.z;
+            xValue = isLocal ? m_NonAuthoritativeTransform.transform.localPosition.x : m_NonAuthoritativeTransform.transform.position.x;
+
+            // Verify the previous state update's position and current state update's position
+            Assert.IsTrue(xValue == 5.0f, $"[Test2][IsLocal: {isLocal}] X axis ({xValue}) does not equal 5.0f!");
+            Assert.IsTrue(zValue == -5.0f, $"[Test2][IsLocal: {isLocal}] Z axis ({zValue}) does not equal -5.0f!");
+        }
+
+        /// <summary>
         /// Test to verify nonAuthority cannot change the transform directly
         /// </summary>
         [Test]
@@ -289,6 +355,7 @@ namespace Unity.Netcode.RuntimeTests
         [Test]
         public void NonAuthorityOwnerSettingStateTest([Values] Interpolation interpolation, [Values] SmoothLerpSettings smoothLerp)
         {
+            m_EnableVerboseDebug = true;
             var interpolate = interpolation == Interpolation.EnableInterpolate;
             var usingSmoothLerp = (smoothLerp == SmoothLerpSettings.SmoothLerp) && interpolate;
             var waitForDelay = usingSmoothLerp ? 1000 : 500;
@@ -300,7 +367,6 @@ namespace Unity.Netcode.RuntimeTests
             m_NonAuthoritativeTransform.Interpolate = interpolate;
             m_NonAuthoritativeTransform.RotAngleThreshold = m_AuthoritativeTransform.RotAngleThreshold = 0.1f;
 
-            m_EnableVerboseDebug = true;
             VerboseDebug($"Target Frame Rate: {Application.targetFrameRate}");
             // Test one parameter at a time first
             var newPosition = usingSmoothLerp ? new Vector3(15f, -12f, 10f) : new Vector3(55f, -24f, 20f);

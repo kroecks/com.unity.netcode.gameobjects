@@ -38,6 +38,13 @@ namespace TestProject.RuntimeTests
             m_NetworkTopologyType = networkTopologyType;
         }
 
+        [OneTimeSetUp]
+        public void OneTimeSetup()
+        {
+            // TODO: [CmbServiceTests] if this test is deemed needed to test against the CMB server then update this test.
+            NetcodeIntegrationTestHelpers.IgnoreIfServiceEnviromentVariableSet();
+        }
+
         private void OnSceneLoaded(Scene scene, LoadSceneMode mode)
         {
             if (scene.name == nameof(NetworkObjectParentingTests))
@@ -200,7 +207,7 @@ namespace TestProject.RuntimeTests
             Assert.That(m_Pickup_NetObjs[setIndex], Is.Not.Null);
             Assert.That(m_Pickup_Back_NetObjs[setIndex], Is.Not.Null);
 
-            LogAssert.Expect(LogType.Exception, new Regex("start a server or host", RegexOptions.IgnoreCase));
+            LogAssert.Expect(LogType.Error, new Regex("start a server or host", RegexOptions.IgnoreCase));
             var cachedParent = m_Cube_NetObjs[setIndex].parent;
             m_Cube_NetObjs[setIndex].parent = m_Pickup_NetObjs[setIndex];
             Assert.That(m_Cube_NetObjs[setIndex].parent, Is.EqualTo(cachedParent), $"Transform {m_Cube_NetObjs[setIndex].parent.name} is not equal to transform {cachedParent.name}");

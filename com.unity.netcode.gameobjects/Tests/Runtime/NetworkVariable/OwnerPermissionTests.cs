@@ -1,5 +1,8 @@
 using System.Collections;
 using System.Collections.Generic;
+#if ENABLE_CORECLR
+using NUnit.Framework;
+#endif
 using Unity.Netcode.TestHelpers.Runtime;
 using UnityEngine;
 using UnityEngine.TestTools;
@@ -98,6 +101,9 @@ namespace Unity.Netcode.RuntimeTests
         }
 
         [UnityTest]
+#if ENABLE_CORECLR
+        [Explicit("Unexpected owner write-permission error logged on CoreCLR, see https://jira.unity3d.com/browse/UUM-149597")]
+#endif
         public IEnumerator OwnerPermissionTest()
         {
             // create 3 objects
@@ -110,16 +116,10 @@ namespace Unity.Netcode.RuntimeTests
                 {
                     ownerManager = m_ClientNetworkManagers[objectIndex - 1];
                 }
-                SpawnObject(m_PrefabToSpawn, ownerManager);
+                var spawnedInstance = SpawnObject(m_PrefabToSpawn, ownerManager);
 
-                // wait for each object to spawn on each client
-                for (var clientIndex = 0; clientIndex < 3; clientIndex++)
-                {
-                    while (OwnerPermissionObject.Objects[objectIndex, clientIndex] == null)
-                    {
-                        yield return new WaitForSeconds(0.0f);
-                    }
-                }
+                yield return WaitForSpawnedOnAllOrTimeOut(spawnedInstance);
+                AssertOnTimeout($"Timed out waiting for all clients to spawn {spawnedInstance.name}!");
             }
 
             var nextValueToWrite = 1;

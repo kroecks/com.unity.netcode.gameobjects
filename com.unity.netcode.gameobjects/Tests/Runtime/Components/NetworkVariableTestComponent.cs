@@ -191,6 +191,7 @@ namespace Unity.Netcode.RuntimeTests
         private NetworkVariable<long> m_NetworkVariableLong = new NetworkVariable<long>();
         private NetworkVariable<sbyte> m_NetworkVariableSByte = new NetworkVariable<sbyte>();
         private NetworkVariable<Quaternion> m_NetworkVariableQuaternion = new NetworkVariable<Quaternion>();
+        private NetworkVariable<Pose> m_NetworkVariablePose = new NetworkVariable<Pose>();
         private NetworkVariable<short> m_NetworkVariableShort = new NetworkVariable<short>();
         private NetworkVariable<Vector4> m_NetworkVariableVector4 = new NetworkVariable<Vector4>();
         private NetworkVariable<Vector3> m_NetworkVariableVector3 = new NetworkVariable<Vector3>();
@@ -217,6 +218,7 @@ namespace Unity.Netcode.RuntimeTests
         public NetworkVariableHelper<long> Long_Var;
         public NetworkVariableHelper<sbyte> Sbyte_Var;
         public NetworkVariableHelper<Quaternion> Quaternion_Var;
+        public NetworkVariableHelper<Pose> Pose_Var;
         public NetworkVariableHelper<short> Short_Var;
         public NetworkVariableHelper<Vector4> Vector4_Var;
         public NetworkVariableHelper<Vector3> Vector3_Var;
@@ -240,7 +242,7 @@ namespace Unity.Netcode.RuntimeTests
         private float m_WaitForChangesTimeout;
 
         // Start is called before the first frame update
-        private void InitializeTest()
+        public void InitializeTest()
         {
             // Generic Constructor Test Coverage
             m_NetworkVariableBool = new NetworkVariable<bool>();
@@ -253,6 +255,7 @@ namespace Unity.Netcode.RuntimeTests
             m_NetworkVariableLong = new NetworkVariable<long>();
             m_NetworkVariableSByte = new NetworkVariable<sbyte>();
             m_NetworkVariableQuaternion = new NetworkVariable<Quaternion>();
+            m_NetworkVariablePose = new NetworkVariable<Pose>();
             m_NetworkVariableShort = new NetworkVariable<short>();
             m_NetworkVariableVector4 = new NetworkVariable<Vector4>();
             m_NetworkVariableVector3 = new NetworkVariable<Vector3>();
@@ -280,6 +283,7 @@ namespace Unity.Netcode.RuntimeTests
             m_NetworkVariableLong = new NetworkVariable<long>(1);
             m_NetworkVariableSByte = new NetworkVariable<sbyte>(0);
             m_NetworkVariableQuaternion = new NetworkVariable<Quaternion>(Quaternion.identity);
+            m_NetworkVariablePose = new NetworkVariable<Pose>(new Pose(new Vector3(1, 1, 1), Quaternion.identity));
             m_NetworkVariableShort = new NetworkVariable<short>(256);
             m_NetworkVariableVector4 = new NetworkVariable<Vector4>(new Vector4(1, 1, 1, 1));
             m_NetworkVariableVector3 = new NetworkVariable<Vector3>(new Vector3(1, 1, 1));
@@ -312,6 +316,7 @@ namespace Unity.Netcode.RuntimeTests
             Long_Var = new NetworkVariableHelper<long>(m_NetworkVariableLong);
             Sbyte_Var = new NetworkVariableHelper<sbyte>(m_NetworkVariableSByte);
             Quaternion_Var = new NetworkVariableHelper<Quaternion>(m_NetworkVariableQuaternion);
+            Pose_Var = new NetworkVariableHelper<Pose>(m_NetworkVariablePose);
             Short_Var = new NetworkVariableHelper<short>(m_NetworkVariableShort);
             Vector4_Var = new NetworkVariableHelper<Vector4>(m_NetworkVariableVector4);
             Vector3_Var = new NetworkVariableHelper<Vector3>(m_NetworkVariableVector3);
@@ -351,11 +356,6 @@ namespace Unity.Netcode.RuntimeTests
             return m_FinishedTests;
         }
 
-        public void Awake()
-        {
-            InitializeTest();
-        }
-
         public void AssertAllValuesAreCorrect()
         {
             Assert.AreEqual(false, m_NetworkVariableBool.Value);
@@ -376,6 +376,13 @@ namespace Unity.Netcode.RuntimeTests
             Assert.AreEqual(100, m_NetworkVariableQuaternion.Value.x);
             Assert.AreEqual(100, m_NetworkVariableQuaternion.Value.y);
             Assert.AreEqual(100, m_NetworkVariableQuaternion.Value.z);
+            Assert.AreEqual(100, m_NetworkVariablePose.Value.position.x);
+            Assert.AreEqual(100, m_NetworkVariablePose.Value.position.y);
+            Assert.AreEqual(100, m_NetworkVariablePose.Value.position.z);
+            Assert.AreEqual(100, m_NetworkVariablePose.Value.rotation.w);
+            Assert.AreEqual(100, m_NetworkVariablePose.Value.rotation.x);
+            Assert.AreEqual(100, m_NetworkVariablePose.Value.rotation.y);
+            Assert.AreEqual(100, m_NetworkVariablePose.Value.rotation.z);
             Assert.AreEqual(short.MaxValue, m_NetworkVariableShort.Value);
             Assert.AreEqual(1000, m_NetworkVariableVector4.Value.w);
             Assert.AreEqual(1000, m_NetworkVariableVector4.Value.x);
@@ -411,55 +418,52 @@ namespace Unity.Netcode.RuntimeTests
         // Update is called once per frame
         private void Update()
         {
-            if (EnableTesting)
+            if (!EnableTesting || !IsSpawned)
             {
-                //Added timeout functionality for near future changes to NetworkVariables
-                if (!m_FinishedTests && m_ChangesAppliedToNetworkVariables)
-                {
-                    //We finish testing if all NetworkVariables changed their value or we timed out waiting for
-                    //all NetworkVariables to change their value
-                    m_FinishedTests = DidAllValuesChange() || (m_WaitForChangesTimeout < Time.realtimeSinceStartup);
-                }
-                else
-                {
-                    if (NetworkManager != null && NetworkManager.IsListening)
-                    {
-                        //Now change all of the values to make sure we are at least testing the local callback
-                        m_NetworkVariableBool.Value = false;
-                        m_NetworkVariableByte.Value = 255;
-                        m_NetworkVariableColor.Value = new Color(100, 100, 100);
-                        m_NetworkVariableColor32.Value = new Color32(100, 100, 100, 100);
-                        m_NetworkVariableDouble.Value = 1000;
-                        m_NetworkVariableFloat.Value = 1000.0f;
-                        m_NetworkVariableInt.Value = 1000;
-                        m_NetworkVariableLong.Value = 100000;
-                        m_NetworkVariableSByte.Value = -127;
-                        m_NetworkVariableQuaternion.Value = new Quaternion(100, 100, 100, 100);
-                        m_NetworkVariableShort.Value = short.MaxValue;
-                        m_NetworkVariableVector4.Value = new Vector4(1000, 1000, 1000, 1000);
-                        m_NetworkVariableVector3.Value = new Vector3(1000, 1000, 1000);
-                        m_NetworkVariableVector2.Value = new Vector2(1000, 1000);
-                        m_NetworkVariableRay.Value = new Ray(Vector3.one, Vector3.right);
-                        m_NetworkVariableULong.Value = ulong.MaxValue;
-                        m_NetworkVariableUInt.Value = uint.MaxValue;
-                        m_NetworkVariableUShort.Value = ushort.MaxValue;
-                        m_NetworkVariableFixedString32.Value = new FixedString32Bytes("FixedString32Bytes");
-                        m_NetworkVariableFixedString64.Value = new FixedString64Bytes("FixedString64Bytes");
-                        m_NetworkVariableFixedString128.Value = new FixedString128Bytes("FixedString128Bytes");
-                        m_NetworkVariableFixedString512.Value = new FixedString512Bytes("FixedString512Bytes");
-                        m_NetworkVariableFixedString4096.Value = new FixedString4096Bytes("FixedString4096Bytes");
-                        m_NetworkVariableManaged.Value = new ManagedNetworkSerializableType
-                        {
-                            Str = "ManagedNetworkSerializableType",
-                            Ints = new[] { 1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000 },
-                            Embedded = new EmbeddedManagedNetworkSerializableType { Int = 20000 }
-                        };
+                return;
+            }
 
-                        //Set the timeout (i.e. how long we will wait for all NetworkVariables to have registered their changes)
-                        m_WaitForChangesTimeout = Time.realtimeSinceStartup + 0.50f;
-                        m_ChangesAppliedToNetworkVariables = true;
-                    }
-                }
+            if (!m_ChangesAppliedToNetworkVariables)
+            {
+                //Now change all of the values to make sure we are at least testing the local callback
+                m_NetworkVariableBool.Value = false;
+                m_NetworkVariableByte.Value = 255;
+                m_NetworkVariableColor.Value = new Color(100, 100, 100);
+                m_NetworkVariableColor32.Value = new Color32(100, 100, 100, 100);
+                m_NetworkVariableDouble.Value = 1000;
+                m_NetworkVariableFloat.Value = 1000.0f;
+                m_NetworkVariableInt.Value = 1000;
+                m_NetworkVariableLong.Value = 100000;
+                m_NetworkVariableSByte.Value = -127;
+                m_NetworkVariableQuaternion.Value = new Quaternion(100, 100, 100, 100);
+                m_NetworkVariablePose.Value = new Pose(new Vector3(100, 100, 100), new Quaternion(100, 100, 100, 100));
+                m_NetworkVariableShort.Value = short.MaxValue;
+                m_NetworkVariableVector4.Value = new Vector4(1000, 1000, 1000, 1000);
+                m_NetworkVariableVector3.Value = new Vector3(1000, 1000, 1000);
+                m_NetworkVariableVector2.Value = new Vector2(1000, 1000);
+                m_NetworkVariableRay.Value = new Ray(Vector3.one, Vector3.right);
+                m_NetworkVariableULong.Value = ulong.MaxValue;
+                m_NetworkVariableUInt.Value = uint.MaxValue;
+                m_NetworkVariableUShort.Value = ushort.MaxValue;
+                m_NetworkVariableFixedString32.Value = new FixedString32Bytes("FixedString32Bytes");
+                m_NetworkVariableFixedString64.Value = new FixedString64Bytes("FixedString64Bytes");
+                m_NetworkVariableFixedString128.Value = new FixedString128Bytes("FixedString128Bytes");
+                m_NetworkVariableFixedString512.Value = new FixedString512Bytes("FixedString512Bytes");
+                m_NetworkVariableFixedString4096.Value = new FixedString4096Bytes("FixedString4096Bytes");
+                m_NetworkVariableManaged.Value = new ManagedNetworkSerializableType
+                {
+                    Str = "ManagedNetworkSerializableType",
+                    Ints = new[] { 1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000 },
+                    Embedded = new EmbeddedManagedNetworkSerializableType { Int = 20000 }
+                };
+
+                //Set the timeout (i.e. how long we will wait for all NetworkVariables to have registered their changes)
+                m_WaitForChangesTimeout = Time.realtimeSinceStartup + 0.50f;
+                m_ChangesAppliedToNetworkVariables = true;
+            }
+            else if (!m_FinishedTests)
+            {
+                m_FinishedTests = DidAllValuesChange() || (m_WaitForChangesTimeout < Time.realtimeSinceStartup);
             }
         }
     }

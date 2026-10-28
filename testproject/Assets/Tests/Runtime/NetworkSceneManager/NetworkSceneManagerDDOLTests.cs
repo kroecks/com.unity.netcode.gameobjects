@@ -19,6 +19,13 @@ namespace TestProject.RuntimeTests
 
         protected float m_ConditionMetFrequency = 0.1f;
 
+        [OneTimeSetUp]
+        public void OneTimeSetup()
+        {
+            // This does not need to be tested against a CMB Server
+            NetcodeIntegrationTestHelpers.IgnoreIfServiceEnviromentVariableSet();
+        }
+
         [UnitySetUp]
         protected IEnumerator SetUp()
         {
@@ -87,8 +94,8 @@ namespace TestProject.RuntimeTests
             [Values(NetworkObjectType.InScenePlaced, NetworkObjectType.DynamicallySpawned)] NetworkObjectType networkObjectType)
         {
             var waitForFullNetworkTick = new WaitForSeconds(1.0f / m_ServerNetworkManager.NetworkConfig.TickRate);
-            var isActive = activeState == DefaultState.IsEnabled ? true : false;
-            var isInScene = networkObjectType == NetworkObjectType.InScenePlaced ? true : false;
+            var isActive = activeState == DefaultState.IsEnabled;
+            var isInScene = networkObjectType == NetworkObjectType.InScenePlaced;
             var objectInstance = Object.Instantiate(m_DDOL_ObjectToSpawn);
 
             var networkObject = objectInstance.GetComponent<NetworkObject>();
@@ -103,7 +110,7 @@ namespace TestProject.RuntimeTests
             }
 
             // Sets whether we are in-scene or dynamically spawned NetworkObject
-            ddolBehaviour.SetInScene(isInScene);
+            networkObject.InScenePlaced = isInScene;
 
             networkObject.Spawn();
             yield return waitForFullNetworkTick;
@@ -140,12 +147,6 @@ namespace TestProject.RuntimeTests
             {
                 NetworkObject.DestroyWithScene = false;
                 base.OnNetworkSpawn();
-            }
-
-            public void SetInScene(bool isInScene)
-            {
-                var networkObject = GetComponent<NetworkObject>();
-                networkObject.IsSceneObject = isInScene;
             }
         }
 

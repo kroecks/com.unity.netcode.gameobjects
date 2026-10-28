@@ -1,8 +1,10 @@
+#pragma warning disable IDE0005
 using System;
 using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 using Unity.Collections;
 using UnityEngine;
-
+#pragma warning restore IDE0005
 
 namespace Unity.Netcode
 {
@@ -39,8 +41,9 @@ namespace Unity.Netcode
 
         // RuntimeAccessModifiersILPP will make this `public`
         internal static readonly Dictionary<Type, Dictionary<uint, RpcReceiveHandler>> __rpc_func_table = new Dictionary<Type, Dictionary<uint, RpcReceiveHandler>>();
+        internal static readonly Dictionary<Type, Dictionary<uint, RpcInvokePermission>> __rpc_permission_table = new Dictionary<Type, Dictionary<uint, RpcInvokePermission>>();
 
-#if DEVELOPMENT_BUILD || UNITY_EDITOR || UNITY_MP_TOOLS_NET_STATS_MONITOR_ENABLED_IN_RELEASE
+#if MULTIPLAYER_TOOLS && (DEBUG || UNITY_MP_TOOLS_NET_STATS_MONITOR_ENABLED_IN_RELEASE)
         // RuntimeAccessModifiersILPP will make this `public`
         internal static readonly Dictionary<Type, Dictionary<uint, string>> __rpc_name_table = new Dictionary<Type, Dictionary<uint, string>>();
 #endif
@@ -74,6 +77,11 @@ namespace Unity.Netcode
         internal FastBufferWriter __beginSendServerRpc(uint rpcMethodId, ServerRpcParams serverRpcParams, RpcDelivery rpcDelivery)
 #pragma warning restore IDE1006 // restore naming rule violation check
         {
+            if (m_NetworkObject == null && !IsSpawned)
+            {
+                throw new RpcException("The NetworkBehaviour must be spawned before calling this method.");
+            }
+
             return new FastBufferWriter(k_RpcMessageDefaultSize, Allocator.Temp, k_RpcMessageMaximumSize);
         }
 
@@ -82,7 +90,6 @@ namespace Unity.Netcode
         internal void __endSendServerRpc(ref FastBufferWriter bufferWriter, uint rpcMethodId, ServerRpcParams serverRpcParams, RpcDelivery rpcDelivery)
 #pragma warning restore IDE1006 // restore naming rule violation check
         {
-            var networkManager = NetworkManager;
             var serverRpcMessage = new ServerRpcMessage
             {
                 Metadata = new RpcMetadata
@@ -99,10 +106,10 @@ namespace Unity.Netcode
             {
                 default:
                 case RpcDelivery.Reliable:
-                    networkDelivery = NetworkDelivery.ReliableFragmentedSequenced;
+                    networkDelivery = MessageDeliveryType<ServerRpcMessage>.DefaultDelivery;
                     break;
                 case RpcDelivery.Unreliable:
-                    if (bufferWriter.Length > networkManager.MessageManager.NonFragmentedMessageMaxSize)
+                    if (bufferWriter.Length > m_NetworkManager.MessageManager.NonFragmentedMessageMaxSize)
                     {
                         throw new OverflowException("RPC parameters are too large for unreliable delivery.");
                     }
@@ -119,8 +126,8 @@ namespace Unity.Netcode
                 var context = new NetworkContext
                 {
                     SenderId = NetworkManager.ServerClientId,
-                    Timestamp = networkManager.RealTimeProvider.RealTimeSinceStartup,
-                    SystemOwner = networkManager,
+                    Timestamp = m_NetworkManager.RealTimeProvider.RealTimeSinceStartup,
+                    SystemOwner = m_NetworkManager,
                     // header information isn't valid since it's not a real message.
                     // RpcMessage doesn't access this stuff so it's just left empty.
                     Header = new NetworkMessageHeader(),
@@ -133,20 +140,13 @@ namespace Unity.Netcode
             }
             else
             {
-                rpcWriteSize = NetworkManager.ConnectionManager.SendMessage(ref serverRpcMessage, networkDelivery, NetworkManager.ServerClientId);
+                rpcWriteSize = m_NetworkManager.ConnectionManager.SendMessage(ref serverRpcMessage, networkDelivery, NetworkManager.ServerClientId);
             }
 
             bufferWriter.Dispose();
-#if DEVELOPMENT_BUILD || UNITY_EDITOR || UNITY_MP_TOOLS_NET_STATS_MONITOR_ENABLED_IN_RELEASE
-            if (__rpc_name_table[GetType()].TryGetValue(rpcMethodId, out var rpcMethodName))
-            {
-                NetworkManager.NetworkMetrics.TrackRpcSent(
-                    NetworkManager.ServerClientId,
-                    NetworkObject,
-                    rpcMethodName,
-                    __getTypeName(),
-                    rpcWriteSize);
-            }
+
+#if MULTIPLAYER_TOOLS && (DEBUG || UNITY_MP_TOOLS_NET_STATS_MONITOR_ENABLED_IN_RELEASE)
+            TrackRpcMetricsSend(ref serverRpcMessage, rpcMethodId, rpcWriteSize);
 #endif
         }
 
@@ -155,6 +155,11 @@ namespace Unity.Netcode
         internal FastBufferWriter __beginSendClientRpc(uint rpcMethodId, ClientRpcParams clientRpcParams, RpcDelivery rpcDelivery)
 #pragma warning restore IDE1006 // restore naming rule violation check
         {
+            if (m_NetworkObject == null && !IsSpawned)
+            {
+                throw new RpcException("The NetworkBehaviour must be spawned before calling this method.");
+            }
+
             return new FastBufferWriter(k_RpcMessageDefaultSize, Allocator.Temp, k_RpcMessageMaximumSize);
         }
 
@@ -163,7 +168,6 @@ namespace Unity.Netcode
         internal void __endSendClientRpc(ref FastBufferWriter bufferWriter, uint rpcMethodId, ClientRpcParams clientRpcParams, RpcDelivery rpcDelivery)
 #pragma warning restore IDE1006 // restore naming rule violation check
         {
-            var networkManager = NetworkManager;
             var clientRpcMessage = new ClientRpcMessage
             {
                 Metadata = new RpcMetadata
@@ -180,10 +184,10 @@ namespace Unity.Netcode
             {
                 default:
                 case RpcDelivery.Reliable:
-                    networkDelivery = NetworkDelivery.ReliableFragmentedSequenced;
+                    networkDelivery = MessageDeliveryType<ClientRpcMessage>.DefaultDelivery;
                     break;
                 case RpcDelivery.Unreliable:
-                    if (bufferWriter.Length > networkManager.MessageManager.NonFragmentedMessageMaxSize)
+                    if (bufferWriter.Length > m_NetworkManager.MessageManager.NonFragmentedMessageMaxSize)
                     {
                         throw new OverflowException("RPC parameters are too large for unreliable delivery.");
                     }
@@ -206,12 +210,12 @@ namespace Unity.Netcode
                         continue;
                     }
                     // Check to make sure we are sending to only observers, if not log an error.
-                    if (networkManager.LogLevel >= LogLevel.Error && !NetworkObject.Observers.Contains(targetClientId))
+                    if (m_NetworkManager.LogLevel >= LogLevel.Error && !m_NetworkObject.Observers.Contains(targetClientId))
                     {
                         NetworkLog.LogError(GenerateObserverErrorMessage(clientRpcParams, targetClientId));
                     }
                 }
-                rpcWriteSize = NetworkManager.ConnectionManager.SendMessage(ref clientRpcMessage, networkDelivery, in clientRpcParams.Send.TargetClientIds);
+                rpcWriteSize = m_NetworkManager.ConnectionManager.SendMessage(ref clientRpcMessage, networkDelivery, in clientRpcParams.Send.TargetClientIds);
             }
             else if (clientRpcParams.Send.TargetClientIdsNativeArray != null)
             {
@@ -223,25 +227,25 @@ namespace Unity.Netcode
                         continue;
                     }
                     // Check to make sure we are sending to only observers, if not log an error.
-                    if (networkManager.LogLevel >= LogLevel.Error && !NetworkObject.Observers.Contains(targetClientId))
+                    if (m_NetworkManager.LogLevel >= LogLevel.Error && !m_NetworkObject.Observers.Contains(targetClientId))
                     {
                         NetworkLog.LogError(GenerateObserverErrorMessage(clientRpcParams, targetClientId));
                     }
                 }
-                rpcWriteSize = NetworkManager.ConnectionManager.SendMessage(ref clientRpcMessage, networkDelivery, clientRpcParams.Send.TargetClientIdsNativeArray.Value);
+                rpcWriteSize = m_NetworkManager.ConnectionManager.SendMessage(ref clientRpcMessage, networkDelivery, clientRpcParams.Send.TargetClientIdsNativeArray.Value);
             }
             else
             {
-                var observerEnumerator = NetworkObject.Observers.GetEnumerator();
+                var observerEnumerator = m_NetworkObject.Observers.GetEnumerator();
                 while (observerEnumerator.MoveNext())
                 {
                     // Skip over the host
-                    if (IsHost && observerEnumerator.Current == NetworkManager.LocalClientId)
+                    if (IsHost && observerEnumerator.Current == m_NetworkManager.LocalClientId)
                     {
                         shouldInvokeLocally = true;
                         continue;
                     }
-                    rpcWriteSize = NetworkManager.ConnectionManager.SendMessage(ref clientRpcMessage, networkDelivery, observerEnumerator.Current);
+                    rpcWriteSize = m_NetworkManager.ConnectionManager.SendMessage(ref clientRpcMessage, networkDelivery, observerEnumerator.Current);
                 }
             }
 
@@ -252,8 +256,8 @@ namespace Unity.Netcode
                 var context = new NetworkContext
                 {
                     SenderId = NetworkManager.ServerClientId,
-                    Timestamp = networkManager.RealTimeProvider.RealTimeSinceStartup,
-                    SystemOwner = networkManager,
+                    Timestamp = m_NetworkManager.RealTimeProvider.RealTimeSinceStartup,
+                    SystemOwner = m_NetworkManager,
                     // header information isn't valid since it's not a real message.
                     // RpcMessage doesn't access this stuff so it's just left empty.
                     Header = new NetworkMessageHeader(),
@@ -265,16 +269,20 @@ namespace Unity.Netcode
             }
 
             bufferWriter.Dispose();
-#if DEVELOPMENT_BUILD || UNITY_EDITOR || UNITY_MP_TOOLS_NET_STATS_MONITOR_ENABLED_IN_RELEASE
+#if MULTIPLAYER_TOOLS && (DEBUG || UNITY_MP_TOOLS_NET_STATS_MONITOR_ENABLED_IN_RELEASE)
+            if (!ValidateRpcMessageMetrics(GetType()))
+            {
+                return;
+            }
             if (__rpc_name_table[GetType()].TryGetValue(rpcMethodId, out var rpcMethodName))
             {
                 if (clientRpcParams.Send.TargetClientIds != null)
                 {
                     foreach (var targetClientId in clientRpcParams.Send.TargetClientIds)
                     {
-                        networkManager.NetworkMetrics.TrackRpcSent(
+                        m_NetworkManager.NetworkMetrics.TrackRpcSent(
                             targetClientId,
-                            NetworkObject,
+                            m_NetworkObject,
                             rpcMethodName,
                             __getTypeName(),
                             rpcWriteSize);
@@ -284,9 +292,9 @@ namespace Unity.Netcode
                 {
                     foreach (var targetClientId in clientRpcParams.Send.TargetClientIdsNativeArray)
                     {
-                        networkManager.NetworkMetrics.TrackRpcSent(
+                        m_NetworkManager.NetworkMetrics.TrackRpcSent(
                             targetClientId,
-                            NetworkObject,
+                            m_NetworkObject,
                             rpcMethodName,
                             __getTypeName(),
                             rpcWriteSize);
@@ -294,12 +302,12 @@ namespace Unity.Netcode
                 }
                 else
                 {
-                    var observerEnumerator = NetworkObject.Observers.GetEnumerator();
+                    var observerEnumerator = m_NetworkObject.Observers.GetEnumerator();
                     while (observerEnumerator.MoveNext())
                     {
-                        networkManager.NetworkMetrics.TrackRpcSent(
+                        m_NetworkManager.NetworkMetrics.TrackRpcSent(
                             observerEnumerator.Current,
-                            NetworkObject,
+                            m_NetworkObject,
                             rpcMethodName,
                             __getTypeName(),
                             rpcWriteSize);
@@ -315,7 +323,21 @@ namespace Unity.Netcode
         internal FastBufferWriter __beginSendRpc(uint rpcMethodId, RpcParams rpcParams, RpcAttribute.RpcAttributeParams attributeParams, SendTo defaultTarget, RpcDelivery rpcDelivery)
 #pragma warning restore IDE1006 // restore naming rule violation check
         {
-            if (attributeParams.RequireOwnership && !IsOwner)
+            if (!IsSpawned)
+            {
+                throw new RpcException("The NetworkBehaviour must be spawned before calling this method.");
+            }
+
+            if (attributeParams.InvokePermission == RpcInvokePermission.Server && !IsServer)
+            {
+                throw new RpcException("This RPC can only be sent by the server.");
+            }
+
+#pragma warning disable CS0618 // Type or member is obsolete
+            var requireOwnership = attributeParams.RequireOwnership;
+#pragma warning restore CS0618 // Type or member is obsolete
+
+            if ((requireOwnership || attributeParams.InvokePermission == RpcInvokePermission.Owner) && !IsOwner)
             {
                 throw new RpcException("This RPC can only be sent by its owner.");
             }
@@ -335,7 +357,7 @@ namespace Unity.Netcode
                     NetworkBehaviourId = NetworkBehaviourId,
                     NetworkRpcMethodId = rpcMethodId,
                 },
-                SenderClientId = NetworkManager.LocalClientId,
+                SenderClientId = m_NetworkManager.LocalClientId,
                 WriteBuffer = bufferWriter
             };
 
@@ -344,10 +366,10 @@ namespace Unity.Netcode
             {
                 default:
                 case RpcDelivery.Reliable:
-                    networkDelivery = NetworkDelivery.ReliableFragmentedSequenced;
+                    networkDelivery = MessageDeliveryType<RpcMessage>.DefaultDelivery;
                     break;
                 case RpcDelivery.Unreliable:
-                    if (bufferWriter.Length > NetworkManager.MessageManager.NonFragmentedMessageMaxSize)
+                    if (bufferWriter.Length > m_NetworkManager.MessageManager.NonFragmentedMessageMaxSize)
                     {
                         throw new OverflowException("RPC parameters are too large for unreliable delivery.");
                     }
@@ -357,41 +379,21 @@ namespace Unity.Netcode
 
             if (rpcParams.Send.Target == null)
             {
-                switch (defaultTarget)
+                rpcParams.Send.Target = defaultTarget switch
                 {
-                    case SendTo.Everyone:
-                        rpcParams.Send.Target = RpcTarget.Everyone;
-                        break;
-                    case SendTo.Owner:
-                        rpcParams.Send.Target = RpcTarget.Owner;
-                        break;
-                    case SendTo.Server:
-                        rpcParams.Send.Target = RpcTarget.Server;
-                        break;
-                    case SendTo.NotServer:
-                        rpcParams.Send.Target = RpcTarget.NotServer;
-                        break;
-                    case SendTo.NotMe:
-                        rpcParams.Send.Target = RpcTarget.NotMe;
-                        break;
-                    case SendTo.NotOwner:
-                        rpcParams.Send.Target = RpcTarget.NotOwner;
-                        break;
-                    case SendTo.Me:
-                        rpcParams.Send.Target = RpcTarget.Me;
-                        break;
-                    case SendTo.ClientsAndHost:
-                        rpcParams.Send.Target = RpcTarget.ClientsAndHost;
-                        break;
-                    case SendTo.Authority:
-                        rpcParams.Send.Target = RpcTarget.Authority;
-                        break;
-                    case SendTo.NotAuthority:
-                        rpcParams.Send.Target = RpcTarget.NotAuthority;
-                        break;
-                    case SendTo.SpecifiedInParams:
-                        throw new RpcException("This method requires a runtime-specified send target.");
-                }
+                    SendTo.Everyone => RpcTarget.Everyone,
+                    SendTo.Owner => RpcTarget.Owner,
+                    SendTo.Server => RpcTarget.Server,
+                    SendTo.NotServer => RpcTarget.NotServer,
+                    SendTo.NotMe => RpcTarget.NotMe,
+                    SendTo.NotOwner => RpcTarget.NotOwner,
+                    SendTo.Me => RpcTarget.Me,
+                    SendTo.ClientsAndHost => RpcTarget.ClientsAndHost,
+                    SendTo.Authority => RpcTarget.Authority,
+                    SendTo.NotAuthority => RpcTarget.NotAuthority,
+                    SendTo.SpecifiedInParams => throw new RpcException("This method requires a runtime-specified send target."),
+                    _ => throw new RpcException("This method requires a runtime-specified send target."),
+                };
             }
             else if (defaultTarget != SendTo.SpecifiedInParams && !attributeParams.AllowTargetOverride)
             {
@@ -422,6 +424,8 @@ namespace Unity.Netcode
             return $"Sending ClientRpc to non-observer! {containerNameHoldingId} contains clientId {targetClientId} that is not an observer!";
         }
 
+        private NetworkManager m_NetworkManager;
+
         /// <summary>
         /// Gets the NetworkManager that owns this NetworkBehaviour instance.
         /// See `NetworkObject` note for how there is a chicken/egg problem when not initialized.
@@ -430,9 +434,14 @@ namespace Unity.Netcode
         {
             get
             {
+                if (m_NetworkManager != null)
+                {
+                    return m_NetworkManager;
+                }
+
                 if (NetworkObject?.NetworkManager != null)
                 {
-                    return NetworkObject?.NetworkManager;
+                    return NetworkObject.NetworkManager;
                 }
 
                 return NetworkManager.Singleton;
@@ -444,18 +453,11 @@ namespace Unity.Netcode
 #pragma warning disable IDE0001
         /// <summary>
         /// Provides access to the various <see cref="SendTo"/> targets at runtime, as well as
-        /// runtime-bound targets like <see cref="Unity.Netcode.RpcTarget.Single"/>,
-        /// <see cref="Unity.Netcode.RpcTarget.Group(NativeArray{ulong})"/>,
-        /// <see cref="Unity.Netcode.RpcTarget.Group(NativeList{ulong})"/>,
-        /// <see cref="Unity.Netcode.RpcTarget.Group(ulong[])"/>,
-        /// <see cref="Unity.Netcode.RpcTarget.Group{T}(T)"/>, <see cref="Unity.Netcode.RpcTarget.Not(ulong)"/>,
-        /// <see cref="Unity.Netcode.RpcTarget.Not(NativeArray{ulong})"/>,
-        /// <see cref="Unity.Netcode.RpcTarget.Not(NativeList{ulong})"/>,
-        /// <see cref="Unity.Netcode.RpcTarget.Not(ulong[])"/>, and
-        /// <see cref="Unity.Netcode.RpcTarget.Not{T}(T)"/>.
+        /// runtime-bound targets like <see cref="RpcTarget.Single"/>, <see cref="RpcTarget.Group{T}"/>, and
+        /// <see cref="RpcTarget.Not{T}"/>.
         /// </summary>
 #pragma warning restore IDE0001
-        public RpcTarget RpcTarget => NetworkManager.RpcTarget;
+        public RpcTarget RpcTarget { get; private set; }
 
         /// <summary>
         /// If a NetworkObject is assigned, returns whether the NetworkObject
@@ -482,23 +484,11 @@ namespace Unity.Netcode
         /// </summary>
         public bool HasAuthority { get; internal set; }
 
-        internal NetworkClient LocalClient { get; private set; }
 
         /// <summary>
         /// Gets whether the client is the distributed authority mode session owner.
         /// </summary>
-        public bool IsSessionOwner
-        {
-            get
-            {
-                if (LocalClient == null)
-                {
-                    return false;
-                }
-
-                return LocalClient.IsSessionOwner;
-            }
-        }
+        public bool IsSessionOwner { get; internal set; }
 
         /// <summary>
         /// Gets whether the server (local or remote) is a host.
@@ -529,11 +519,19 @@ namespace Unity.Netcode
 
         internal bool IsBehaviourEditable()
         {
-            // Only server can MODIFY. So allow modification if network is either not running or we are server
-            return !m_NetworkObject ||
-                m_NetworkObject.NetworkManager == null ||
-                m_NetworkObject.NetworkManager.IsListening == false ||
-                m_NetworkObject.NetworkManager.IsServer;
+            if (!m_NetworkObject || !m_NetworkManager || !m_NetworkManager.IsListening)
+            {
+                return true;
+            }
+
+            // Only the authority can MODIFY. So allow modification if network is either not running or we are the authority.
+            return HasAuthority;
+        }
+
+        internal void SetNetworkObject(NetworkObject networkObject, ushort behaviourId)
+        {
+            m_NetworkObject = networkObject;
+            NetworkBehaviourId = behaviourId;
         }
 
         //  TODO: this needs an overhaul.  It's expensive, it's ja little naive in how it looks for networkObject in
@@ -569,7 +567,7 @@ namespace Unity.Netcode
                 // or NetworkBehaviour.IsSpawned (i.e. to early exit if not spawned) which, in turn, could generate several Warning messages
                 // per spawned NetworkObject.  Checking for ShutdownInProgress prevents these unnecessary LogWarning messages.
                 // We must check IsSpawned, otherwise a warning will be logged under certain valid conditions (see OnDestroy)
-                if (IsSpawned && m_NetworkObject == null && (NetworkManager.Singleton == null || !NetworkManager.Singleton.ShutdownInProgress))
+                if (IsSpawned && m_NetworkObject == null && (m_NetworkManager == null || !m_NetworkManager.ShutdownInProgress))
                 {
                     if (NetworkLog.CurrentLogLevel <= LogLevel.Normal)
                     {
@@ -586,7 +584,7 @@ namespace Unity.Netcode
         /// </summary>
         public bool HasNetworkObject => NetworkObject != null;
 
-        private NetworkObject m_NetworkObject = null;
+        private NetworkObject m_NetworkObject;
 
         /// <summary>
         /// Gets the NetworkId of the NetworkObject that owns this NetworkBehaviour instance.
@@ -597,11 +595,6 @@ namespace Unity.Netcode
         /// Gets NetworkId for this NetworkBehaviour from the owner NetworkObject.
         /// </summary>
         public ushort NetworkBehaviourId { get; internal set; }
-
-        /// <summary>
-        /// Internally caches the Id of this behaviour in a NetworkObject. Makes look-up faster
-        /// </summary>
-        internal ushort NetworkBehaviourIdCache = 0;
 
         /// <summary>
         /// Returns the NetworkBehaviour with a given BehaviourId for the current NetworkObject.
@@ -619,49 +612,66 @@ namespace Unity.Netcode
         public ulong OwnerClientId { get; internal set; }
 
         /// <summary>
+        /// Returns true if the NetworkObject is in the middle of being destroyed.
+        /// </summary>
+        /// <remarks>
+        /// <see cref="SetIsDestroying"/>
+        /// </remarks>
+        internal bool IsDestroying { get; private set; }
+
+        /// <summary>
+        /// This provides us with a way to track when something is in the middle
+        /// of being destroyed or will be destroyed by something like SceneManager.
+        /// </summary>
+        protected internal virtual void OnIsDestroying()
+        {
+        }
+
+        /// <summary>
+        /// Invoked by <see cref="NetworkObject.SetIsDestroying"/>.
+        /// </summary>
+        /// <remarks>
+        /// We want to invoke the virtual method prior to setting the
+        /// IsDestroying flag to be able to distinguish between knowing
+        /// when something will be destroyed (i.e. scene manager unload
+        /// or load in single mode) or is in the middle of being
+        /// destroyed.
+        /// Setting the flag provides a way for other instances or internals
+        /// to determine if this <see cref="NetworkBehaviour"/> instance is
+        /// in the middle of being destroyed.
+        /// </remarks>
+        internal void SetIsDestroying()
+        {
+            // We intentionally invoke this before setting the IsDestroying flag.
+            OnIsDestroying();
+            IsDestroying = true;
+        }
+
+        /// <summary>
         /// Updates properties with network session related
         /// dependencies such as a NetworkObject's spawned
         /// state or NetworkManager's session state.
         /// </summary>
         internal void UpdateNetworkProperties()
         {
-            var networkObject = NetworkObject;
-            // Set NetworkObject dependent properties
-            if (networkObject != null)
+            // Set identification related properties
+            NetworkObjectId = m_NetworkObject.NetworkObjectId;
+            IsLocalPlayer = m_NetworkObject.IsLocalPlayer;
+
+            // Set ownership related properties
+            IsOwnedByServer = m_NetworkObject.IsOwnedByServer;
+            IsOwner = m_NetworkObject.IsOwner;
+            OwnerClientId = m_NetworkObject.OwnerClientId;
+
+            // Set NetworkManager dependent properties
+            if (m_NetworkManager != null)
             {
-                var networkManager = NetworkManager;
-                // Set identification related properties
-                NetworkObjectId = networkObject.NetworkObjectId;
-                IsLocalPlayer = networkObject.IsLocalPlayer;
-
-                // This is "OK" because GetNetworkBehaviourOrderIndex uses the order of
-                // NetworkObject.ChildNetworkBehaviours which is set once when first
-                // accessed.
-                NetworkBehaviourId = networkObject.GetNetworkBehaviourOrderIndex(this);
-
-                // Set ownership related properties
-                IsOwnedByServer = networkObject.IsOwnedByServer;
-                IsOwner = networkObject.IsOwner;
-                OwnerClientId = networkObject.OwnerClientId;
-
-                // Set NetworkManager dependent properties
-                if (networkManager != null)
-                {
-                    IsHost = networkManager.IsListening && networkManager.IsHost;
-                    IsClient = networkManager.IsListening && networkManager.IsClient;
-                    IsServer = networkManager.IsListening && networkManager.IsServer;
-                    LocalClient = networkManager.LocalClient;
-                    HasAuthority = networkObject.HasAuthority;
-                    ServerIsHost = networkManager.IsListening && networkManager.ServerIsHost;
-                }
-            }
-            else // Shouldn't happen, but if so then set the properties to their default value;
-            {
-                OwnerClientId = NetworkObjectId = default;
-                IsOwnedByServer = IsOwner = IsHost = IsClient = IsServer = ServerIsHost = default;
-                NetworkBehaviourId = default;
-                LocalClient = default;
-                HasAuthority = default;
+                IsHost = m_NetworkManager.IsListening && m_NetworkManager.IsHost;
+                IsClient = m_NetworkManager.IsListening && m_NetworkManager.IsClient;
+                IsServer = m_NetworkManager.IsListening && m_NetworkManager.IsServer;
+                IsSessionOwner = m_NetworkManager.IsListening && m_NetworkManager.LocalClient.IsSessionOwner;
+                HasAuthority = m_NetworkObject.HasAuthority;
+                ServerIsHost = m_NetworkManager.IsListening && m_NetworkManager.ServerIsHost;
             }
         }
 
@@ -737,8 +747,35 @@ namespace Unity.Netcode
         /// </summary>
         public virtual void OnNetworkDespawn() { }
 
-        internal void NetworkPreSpawn(ref NetworkManager networkManager)
+        /// <summary>
+        /// Gets called before <see cref="OnNetworkDespawn"/> has been invoked for all <see cref="NetworkBehaviour"/>s associated with the currently spawned <see cref="NetworkObject"/> instance.
+        /// </summary>
+        public virtual void OnNetworkPreDespawn() { }
+
+        internal virtual void InternalOnNetworkPreSpawn(ref NetworkManager networkManager) { }
+
+        /// <summary>
+        /// Handles pre-spawn related initializations.
+        /// Invokes any <see cref="InternalOnNetworkPreSpawn"/> subscriptions.
+        /// Finally invokes <see cref="OnNetworkPreSpawn"/>.
+        /// </summary>
+        internal void NetworkPreSpawn(ref NetworkManager networkManager, NetworkObject networkObject)
         {
+            m_NetworkObject = networkObject;
+            m_NetworkManager = networkManager;
+            RpcTarget = networkManager.RpcTarget;
+
+            UpdateNetworkProperties();
+
+            InternalOnNetworkPreSpawn(ref networkManager);
+
+            // Exit early for disabled NetworkBehaviours.
+            // We still want the above values to be set.
+            if (!gameObject.activeInHierarchy)
+            {
+                return;
+            }
+
             try
             {
                 OnNetworkPreSpawn(ref networkManager);
@@ -749,14 +786,27 @@ namespace Unity.Netcode
             }
         }
 
+        /// <summary>
+        /// Initializes the:
+        /// - <see cref="IsSpawned"/> state.
+        /// - <see cref="NetworkVariableBase"/> instances.
+        /// - Spawned related properties are applied.
+        /// !! Note !!:
+        /// This also populates RPC related tables based on this <see cref="NetworkBehaviour"/>'s RPCs (if any).
+        /// </summary>
         internal void InternalOnNetworkSpawn()
         {
             IsSpawned = true;
+            // Initialize the NetworkVariables and **RPC tables** so they are accessible in OnNetworkSpawn
             InitializeVariables();
+            // Apply the spawned state/properties to this instance
             UpdateNetworkProperties();
         }
 
-        internal void VisibleOnNetworkSpawn()
+        /// <summary>
+        /// Handles invoking <see cref="OnNetworkSpawn"/>.
+        /// </summary>
+        internal void NetworkSpawn()
         {
             try
             {
@@ -766,18 +816,11 @@ namespace Unity.Netcode
             {
                 Debug.LogException(e);
             }
-
-            InitializeVariables();
-
-            if (NetworkObject.HasAuthority)
-            {
-                // Since we just spawned the object and since user code might have modified their NetworkVariable, esp.
-                // NetworkList, we need to mark the object as free of updates.
-                // This should happen for all objects on the machine triggering the spawn.
-                PostNetworkVariableWrite(true);
-            }
         }
 
+        /// <summary>
+        /// Handles invoking <see cref="OnNetworkPostSpawn"/>.
+        /// </summary>
         internal void NetworkPostSpawn()
         {
             try
@@ -789,8 +832,18 @@ namespace Unity.Netcode
             {
                 Debug.LogException(e);
             }
+
+            // Let each NetworkVariableBase derived instance know that
+            // all spawn related methods have been invoked.
+            for (int i = 0; i < NetworkVariableFields.Count; i++)
+            {
+                NetworkVariableFields[i].InternalOnSpawned();
+            }
         }
 
+        /// <summary>
+        /// Handles invoking <see cref="OnNetworkSessionSynchronized"/>.
+        /// </summary>
         internal void NetworkSessionSynchronized()
         {
             try
@@ -804,6 +857,9 @@ namespace Unity.Netcode
             }
         }
 
+        /// <summary>
+        /// Handles invoking <see cref="OnInSceneObjectsSpawned"/>.
+        /// </summary>
         internal void InSceneNetworkObjectsSpawned()
         {
             try
@@ -816,6 +872,31 @@ namespace Unity.Netcode
             }
         }
 
+        /// <summary>
+        /// Handles invoking <see cref="OnNetworkPreDespawn"/>.
+        /// </summary>
+        internal void InternalOnNetworkPreDespawn()
+        {
+            try
+            {
+                OnNetworkPreDespawn();
+            }
+            catch (Exception e)
+            {
+                Debug.LogException(e);
+            }
+
+            // Let each NetworkVariableBase derived instance know that
+            // all spawn related methods have been invoked.
+            for (int i = 0; i < NetworkVariableFields.Count; i++)
+            {
+                NetworkVariableFields[i].InternalOnPreDespawn();
+            }
+        }
+
+        /// <summary>
+        /// Handles invoking <see cref="OnNetworkDespawn"/>.
+        /// </summary>
         internal void InternalOnNetworkDespawn()
         {
             IsSpawned = false;
@@ -845,11 +926,10 @@ namespace Unity.Netcode
 
         internal void InternalOnGainedOwnership()
         {
-            UpdateNetworkProperties();
             // New owners need to assure any NetworkVariables they have write permissions
             // to are updated so the previous and original values are aligned with the
             // current value (primarily for collections).
-            if (OwnerClientId == NetworkManager.LocalClientId)
+            if (IsOwner)
             {
                 UpdateNetworkVariableOnOwnershipChanged();
             }
@@ -879,12 +959,6 @@ namespace Unity.Netcode
         /// In distributed authority contexts, this method is invoked on all clients connected to the session.
         /// </summary>
         public virtual void OnLostOwnership() { }
-
-        internal void InternalOnLostOwnership()
-        {
-            UpdateNetworkProperties();
-            OnLostOwnership();
-        }
 
         /// <summary>
         /// Gets called when the parent NetworkObject of this NetworkBehaviour's NetworkObject has changed.
@@ -919,15 +993,95 @@ namespace Unity.Netcode
         }
 
 #pragma warning disable IDE1006 // disable naming rule violation check
+        // This is needed to add the RpcInvokePermission as even with an optional parameter, the change counts as a breaking change.
+        internal void __registerRpc(uint hash, RpcReceiveHandler handler, string rpcMethodName) => __registerRpc(hash, handler, rpcMethodName, RpcInvokePermission.Everyone);
         // RuntimeAccessModifiersILPP will make this `protected`
-        internal void __registerRpc(uint hash, RpcReceiveHandler handler, string rpcMethodName)
+        internal void __registerRpc(uint hash, RpcReceiveHandler handler, string rpcMethodName, RpcInvokePermission permission)
 #pragma warning restore IDE1006 // restore naming rule violation check
         {
-            __rpc_func_table[GetType()][hash] = handler;
-#if DEVELOPMENT_BUILD || UNITY_EDITOR || UNITY_MP_TOOLS_NET_STATS_MONITOR_ENABLED_IN_RELEASE
-            __rpc_name_table[GetType()][hash] = rpcMethodName;
+            var rpcType = GetType();
+            __rpc_func_table[rpcType][hash] = handler;
+            __rpc_permission_table[rpcType][hash] = permission;
+#if MULTIPLAYER_TOOLS && (DEBUG || UNITY_MP_TOOLS_NET_STATS_MONITOR_ENABLED_IN_RELEASE)
+            __rpc_name_table[rpcType][hash] = rpcMethodName;
 #endif
         }
+
+#if MULTIPLAYER_TOOLS && (DEBUG || UNITY_MP_TOOLS_NET_STATS_MONITOR_ENABLED_IN_RELEASE)
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private bool ValidateRpcMessageMetrics(Type type)
+        {
+            if (m_NetworkManager == null)
+            {
+                Debug.LogError($"[{nameof(ValidateRpcMessageMetrics)}][{type.Name}] {nameof(NetworkBehaviour)} is attempting to invoking an RPC before {nameof(NetworkManager)} has been initialized!");
+                return false;
+            }
+
+            if (!__rpc_name_table.ContainsKey(type))
+            {
+                Debug.LogError($"[{nameof(ValidateRpcMessageMetrics)}][{type.Name}][{nameof(__rpc_name_table)}] RPC table initialization failure: Table does not contain an entry for {type.Name}!");
+                return false;
+            }
+            return true;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal void TrackRpcMetricsSend(ref ServerRpcMessage message, uint rpcMethodId, int rpcWriteSize)
+        {
+            var type = GetType();
+            if (!ValidateRpcMessageMetrics(type))
+            {
+                return;
+            }
+            if (__rpc_name_table[type].TryGetValue(rpcMethodId, out var rpcMethodName))
+            {
+                m_NetworkManager.NetworkMetrics.TrackRpcSent(
+                    NetworkManager.ServerClientId,
+                    m_NetworkObject,
+                    rpcMethodName,
+                    __getTypeName(),
+                    rpcWriteSize);
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal void TrackRpcMetricsSend(ulong clientId, ref RpcMessage message, int length)
+        {
+            var type = GetType();
+            if (!ValidateRpcMessageMetrics(type))
+            {
+                return;
+            }
+            if (__rpc_name_table[type].TryGetValue(message.Metadata.NetworkRpcMethodId, out var rpcMethodName))
+            {
+                m_NetworkManager.NetworkMetrics.TrackRpcSent(
+                    m_NetworkManager.LocalClientId,
+                    NetworkObject,
+                    rpcMethodName,
+                    __getTypeName(),
+                    length);
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal void TrackRpcMetricsReceive(ref RpcMetadata metadata, ref NetworkContext context, int length)
+        {
+            var type = GetType();
+            if (!ValidateRpcMessageMetrics(type))
+            {
+                return;
+            }
+            if (__rpc_name_table[type].TryGetValue(metadata.NetworkRpcMethodId, out var rpcMethodName))
+            {
+                m_NetworkManager.NetworkMetrics.TrackRpcReceived(
+                    context.SenderId,
+                    NetworkObject,
+                    rpcMethodName,
+                    __getTypeName(),
+                    length);
+            }
+        }
+#endif
 
 #pragma warning disable IDE1006 // disable naming rule violation check
         // RuntimeAccessModifiersILPP will make this `protected`
@@ -951,14 +1105,14 @@ namespace Unity.Netcode
                 // placed NetworkObject in an already loaded scene that has already been
                 // used within a network session =or= if this is a pooled NetworkObject
                 // that is being repurposed.
-                for (int i = 0; i < NetworkVariableFields.Count; i++)
+                foreach (var variable in NetworkVariableFields)
                 {
                     // If already initialized, then skip
-                    if (NetworkVariableFields[i].HasBeenInitialized)
+                    if (variable.HasBeenInitialized)
                     {
                         continue;
                     }
-                    NetworkVariableFields[i].Initialize(this);
+                    variable.Initialize(this);
                 }
                 // Exit early as we don't need to run through the rest of this initialization
                 // process
@@ -970,7 +1124,8 @@ namespace Unity.Netcode
             if (!__rpc_func_table.ContainsKey(GetType()))
             {
                 __rpc_func_table[GetType()] = new Dictionary<uint, RpcReceiveHandler>();
-#if UNITY_EDITOR || DEVELOPMENT_BUILD || UNITY_MP_TOOLS_NET_STATS_MONITOR_ENABLED_IN_RELEASE
+                __rpc_permission_table[GetType()] = new Dictionary<uint, RpcInvokePermission>();
+#if MULTIPLAYER_TOOLS && (DEBUG || UNITY_MP_TOOLS_NET_STATS_MONITOR_ENABLED_IN_RELEASE)
                 __rpc_name_table[GetType()] = new Dictionary<uint, string>();
 #endif
                 __initializeRpcs();
@@ -984,10 +1139,9 @@ namespace Unity.Netcode
 
                 for (int i = 0; i < NetworkVariableFields.Count; i++)
                 {
-                    var networkDelivery = NetworkVariableBase.Delivery;
-                    if (!firstLevelIndex.ContainsKey(networkDelivery))
+                    var networkDelivery = MessageDeliveryType<NetworkVariableDeltaMessage>.DefaultDelivery;
+                    if (firstLevelIndex.TryAdd(networkDelivery, secondLevelCounter))
                     {
-                        firstLevelIndex.Add(networkDelivery, secondLevelCounter);
                         m_DeliveryTypesForNetworkVariableGroups.Add(networkDelivery);
                         secondLevelCounter++;
                     }
@@ -1015,9 +1169,8 @@ namespace Unity.Netcode
             {
                 // Mark every variable as no longer dirty. We just spawned the object and whatever the game code did
                 // during OnNetworkSpawn has been sent and needs to be cleared
-                for (int i = 0; i < NetworkVariableFields.Count; i++)
+                foreach (var networkVariable in NetworkVariableFields)
                 {
-                    var networkVariable = NetworkVariableFields[i];
                     if (networkVariable.IsDirty())
                     {
                         if (networkVariable.CanSend())
@@ -1076,9 +1229,8 @@ namespace Unity.Netcode
             }
 
             // Getting these ahead of time actually improves performance
-            var networkManager = NetworkManager;
-            var networkObject = NetworkObject;
-            var behaviourIndex = networkObject.GetNetworkBehaviourOrderIndex(this);
+            var networkManager = m_NetworkManager;
+            var networkObject = m_NetworkObject;
             var messageManager = networkManager.MessageManager;
             var connectionManager = networkManager.ConnectionManager;
 
@@ -1094,8 +1246,8 @@ namespace Unity.Netcode
                         if (networkVariable.CanSend())
                         {
                             shouldSend = true;
+                            break;
                         }
-                        break;
                     }
                 }
                 // All of this is just to prevent the DA Host from re-sending a NetworkVariable update it received from the client owner
@@ -1118,7 +1270,7 @@ namespace Unity.Netcode
                 var message = new NetworkVariableDeltaMessage
                 {
                     NetworkObjectId = NetworkObjectId,
-                    NetworkBehaviourIndex = behaviourIndex,
+                    NetworkBehaviourIndex = NetworkBehaviourId,
                     NetworkBehaviour = this,
                     TargetClientId = targetClientId,
                     DeliveryMappedNetworkVariableIndex = m_DeliveryMappedNetworkVariableIndices[j],
@@ -1147,14 +1299,11 @@ namespace Unity.Netcode
             }
         }
 
-        internal static bool LogSentVariableUpdateMessage;
-
         private bool CouldHaveDirtyNetworkVariables()
         {
             // TODO: There should be a better way by reading one dirty variable vs. 'n'
-            for (int i = 0; i < NetworkVariableFields.Count; i++)
+            foreach (var networkVariable in NetworkVariableFields)
             {
-                var networkVariable = NetworkVariableFields[i];
                 if (networkVariable.IsDirty())
                 {
                     if (networkVariable.CanSend())
@@ -1163,7 +1312,7 @@ namespace Unity.Netcode
                     }
                     // If it's dirty but can't be sent yet, we have to keep monitoring it until one of the
                     // conditions blocking its send changes.
-                    NetworkManager.BehaviourUpdater.AddForUpdate(NetworkObject);
+                    m_NetworkManager.BehaviourUpdater.AddForUpdate(m_NetworkObject);
                 }
             }
 
@@ -1180,12 +1329,12 @@ namespace Unity.Netcode
         /// </remarks>
         internal void UpdateNetworkVariableOnOwnershipChanged()
         {
-            for (int j = 0; j < NetworkVariableFields.Count; j++)
+            foreach (var variable in NetworkVariableFields)
             {
                 // Only invoke OnInitialize on NetworkVariables the owner can write to
-                if (NetworkVariableFields[j].CanClientWrite(OwnerClientId))
+                if (variable.CanClientWrite(OwnerClientId))
                 {
-                    NetworkVariableFields[j].OnInitialize();
+                    variable.OnInitialize();
                 }
             }
         }
@@ -1205,15 +1354,15 @@ namespace Unity.Netcode
         /// </summary>
         internal void MarkOwnerReadDirtyAndCheckOwnerWriteIsDirty()
         {
-            for (int j = 0; j < NetworkVariableFields.Count; j++)
+            foreach (var variable in NetworkVariableFields)
             {
-                if (NetworkVariableFields[j].ReadPerm == NetworkVariableReadPermission.Owner)
+                if (variable.ReadPerm == NetworkVariableReadPermission.Owner)
                 {
-                    NetworkVariableFields[j].SetDirty(true);
+                    variable.SetDirty(true);
                 }
-                if (NetworkVariableFields[j].WritePerm == NetworkVariableWritePermission.Owner)
+                if (variable.WritePerm == NetworkVariableWritePermission.Owner)
                 {
-                    NetworkVariableFields[j].OnCheckIsDirtyState();
+                    variable.OnCheckIsDirtyState();
                 }
             }
         }
@@ -1229,58 +1378,44 @@ namespace Unity.Netcode
         internal void WriteNetworkVariableData(FastBufferWriter writer, ulong targetClientId)
         {
             // Create any values that require accessing the NetworkManager locally (it is expensive to access it in NetworkBehaviour)
-            var networkManager = NetworkManager;
+            var networkManager = m_NetworkManager;
             var ensureLengthSafety = networkManager.NetworkConfig.EnsureNetworkVariableLengthSafety;
 
-
-            // Exit early if there are no NetworkVariables
-            if (NetworkVariableFields.Count == 0)
-            {
-                return;
-            }
-
-            for (int j = 0; j < NetworkVariableFields.Count; j++)
+            foreach (var field in NetworkVariableFields)
             {
                 // Client-Server: Try to write values only for clients that have read permissions.
                 // Distributed Authority: All clients have read permissions, always try to write the value.
-                if (NetworkVariableFields[j].CanClientRead(targetClientId))
+                if (field.CanClientRead(targetClientId))
                 {
-                    // Write additional NetworkVariable information when length safety is enabled or when in distributed authority mode
+                    // Write additional NetworkVariable information when length safety is enabled
                     if (ensureLengthSafety)
                     {
                         var writePos = writer.Position;
                         // Note: This value can't be packed because we don't know how large it will be in advance
-                        // we reserve space for it, then write the data, then come back and fill in the space
-                        // to pack here, we'd have to write data to a temporary buffer and copy it in - which
-                        // isn't worth possibly saving one byte if and only if the data is less than 63 bytes long...
-                        // The way we do packing, any value > 63 in a ushort will use the full 2 bytes to represent.
-                        writer.WriteValueSafe((ushort)0);
+                        // we reserve space for it, then write the data, then come back and write the final size value
+                        writer.WriteValueSafe(0);
                         var startPos = writer.Position;
+
                         // Write the NetworkVariable field value
-                        // WriteFieldSynchronization will write the current value only if there are no pending changes.
-                        // Otherwise, it will write the previous value if there are pending changes since the pending
-                        // changes will be sent shortly after the client's synchronization.
-                        NetworkVariableFields[j].WriteFieldSynchronization(writer);
+                        field.WriteFieldSynchronization(writer);
+
+                        // Write the NetworkVariable field value size
                         var size = writer.Position - startPos;
                         writer.Seek(writePos);
-                        // Write the NetworkVariable field value size
-                        writer.WriteValueSafe((ushort)size);
+                        writer.WriteValueSafe(size);
                         writer.Seek(startPos + size);
                     }
-                    else // Client-Server Only: Should only ever be invoked when using a client-server NetworkTopology
+                    else
                     {
                         // Write the NetworkVariable field value
-                        // WriteFieldSynchronization will write the current value only if there are no pending changes.
-                        // Otherwise, it will write the previous value if there are pending changes since the pending
-                        // changes will be sent shortly after the client's synchronization.
-                        NetworkVariableFields[j].WriteFieldSynchronization(writer);
+                        field.WriteFieldSynchronization(writer);
                     }
                 }
                 else if (ensureLengthSafety)
                 {
                     // Client-Server Only: If the client cannot read this field, then skip it but write a 0 for this NetworkVariable's position
                     {
-                        writer.WriteValueSafe((ushort)0);
+                        writer.WriteValueSafe(0);
                     }
                 }
             }
@@ -1297,29 +1432,23 @@ namespace Unity.Netcode
         internal void SetNetworkVariableData(FastBufferReader reader, ulong clientId)
         {
             // Stack cache any values that requires accessing the NetworkManager (it is expensive to access it in NetworkBehaviour)
-            var networkManager = NetworkManager;
+            var networkManager = m_NetworkManager;
             var ensureLengthSafety = networkManager.NetworkConfig.EnsureNetworkVariableLengthSafety;
 
-            // Exit early if nothing else to read
-            if (NetworkVariableFields.Count == 0)
+            foreach (var field in NetworkVariableFields)
             {
-                return;
-            }
-
-            for (int j = 0; j < NetworkVariableFields.Count; j++)
-            {
-                var varSize = (ushort)0;
+                int expectedBytesToRead = 0;
                 var readStartPos = 0;
                 // Client-Server: Clients that only have read permissions will try to read the value
                 // Distributed Authority: All clients have read permissions, always try to read the value
-                if (NetworkVariableFields[j].CanClientRead(clientId))
+                if (field.CanClientRead(clientId))
                 {
                     if (ensureLengthSafety)
                     {
-                        reader.ReadValueSafe(out varSize);
-                        if (varSize == 0)
+                        reader.ReadValueSafe(out expectedBytesToRead);
+                        if (expectedBytesToRead == 0)
                         {
-                            Debug.LogError($"[{name}][NetworkObjectId: {NetworkObjectId}][NetworkBehaviourId: {NetworkBehaviourId}][{NetworkVariableFields[j].Name}] Expected non-zero size readable NetworkVariable! (Skipping)");
+                            Debug.LogError($"[{name}][NetworkObjectId: {NetworkObjectId}][NetworkBehaviourId: {NetworkBehaviourId}][{field.Name}] Expected non-zero size readable NetworkVariable! (Skipping)");
                             continue;
                         }
                         readStartPos = reader.Position;
@@ -1330,38 +1459,29 @@ namespace Unity.Netcode
                     // If skipping and length safety, then fill in a 0 size for this one spot
                     if (ensureLengthSafety)
                     {
-                        reader.ReadValueSafe(out ushort size);
-                        if (size != 0)
+                        reader.ReadValueSafe(out expectedBytesToRead);
+                        if (expectedBytesToRead != 0)
                         {
-                            Debug.LogError($"[{name}][NetworkObjectId: {NetworkObjectId}][NetworkBehaviourId: {NetworkBehaviourId}][{NetworkVariableFields[j].Name}] Expected zero size for non-readable NetworkVariable when EnsureNetworkVariableLengthSafety is enabled! (Skipping)");
+                            Debug.LogError($"[{name}][NetworkObjectId: {NetworkObjectId}][NetworkBehaviourId: {NetworkBehaviourId}][{field.Name}] Expected zero size for non-readable NetworkVariable when EnsureNetworkVariableLengthSafety is enabled! (Skipping)");
                         }
                     }
                     continue;
                 }
 
                 // Read the NetworkVariable value
-                NetworkVariableFields[j].ReadField(reader);
+                field.ReadField(reader);
 
                 // When EnsureNetworkVariableLengthSafety always do a bounds check
                 if (ensureLengthSafety)
                 {
-                    if (reader.Position > (readStartPos + varSize))
+                    var totalBytesRead = reader.Position - readStartPos;
+                    if (totalBytesRead != expectedBytesToRead)
                     {
-                        if (NetworkLog.CurrentLogLevel <= LogLevel.Normal)
+                        if (networkManager.LogLevel <= LogLevel.Normal)
                         {
-                            NetworkLog.LogWarning($"[{name}][NetworkObjectId: {NetworkObjectId}][NetworkBehaviourId: {NetworkBehaviourId}][{NetworkVariableFields[j].Name}] NetworkVariable data read too big. {reader.Position - (readStartPos + varSize)} bytes.");
+                            NetworkLog.LogWarning($"[{name}][NetworkObjectId: {NetworkObjectId}][NetworkBehaviourId: {NetworkBehaviourId}][{field.Name}] NetworkVariable read {totalBytesRead} bytes but was expected to read {expectedBytesToRead} bytes during synchronization deserialization!");
                         }
-
-                        reader.Seek(readStartPos + varSize);
-                    }
-                    else if (reader.Position < (readStartPos + varSize))
-                    {
-                        if (NetworkLog.CurrentLogLevel <= LogLevel.Normal)
-                        {
-                            NetworkLog.LogWarning($"[{name}][NetworkObjectId: {NetworkObjectId}][NetworkBehaviourId: {NetworkBehaviourId}][{NetworkVariableFields[j].Name}] NetworkVariable data read too small. {(readStartPos + varSize) - reader.Position} bytes.");
-                        }
-
-                        reader.Seek(readStartPos + varSize);
+                        reader.Seek(readStartPos + expectedBytesToRead);
                     }
                 }
             }
@@ -1374,7 +1494,7 @@ namespace Unity.Netcode
         /// <returns>The NetworkObject instance if found, null if no object exists with the specified networkId</returns>
         protected NetworkObject GetNetworkObject(ulong networkId)
         {
-            return NetworkManager.SpawnManager.SpawnedObjects.TryGetValue(networkId, out NetworkObject networkObject) ? networkObject : null;
+            return m_NetworkManager.SpawnManager.SpawnedObjects.GetValueOrDefault(networkId);
         }
 
         /// <summary>
@@ -1443,7 +1563,7 @@ namespace Unity.Netcode
                 // Save our position where we will write the final size being written so we can skip over it in the
                 // event an exception occurs when deserializing.
                 var sizePosition = writer.Position;
-                writer.WriteValueSafe((ushort)0);
+                writer.WriteValueSafe(0);
 
                 // Save our position before synchronizing to determine how much was written
                 var positionBeforeSynchronize = writer.Position;
@@ -1455,10 +1575,10 @@ namespace Unity.Netcode
                 catch (Exception ex)
                 {
                     threwException = true;
-                    if (NetworkManager.LogLevel <= LogLevel.Normal)
+                    if (m_NetworkManager.LogLevel <= LogLevel.Normal)
                     {
                         NetworkLog.LogWarning($"{name} threw an exception during synchronization serialization, this {nameof(NetworkBehaviour)} is being skipped and will not be synchronized!");
-                        if (NetworkManager.LogLevel == LogLevel.Developer)
+                        if (m_NetworkManager.LogLevel == LogLevel.Developer)
                         {
                             NetworkLog.LogError($"{ex.Message}\n {ex.StackTrace}");
                         }
@@ -1481,7 +1601,7 @@ namespace Unity.Netcode
                     // Write the number of bytes serialized to handle exceptions on the deserialization side
                     var bytesWritten = finalPosition - positionBeforeSynchronize;
                     writer.Seek(sizePosition);
-                    writer.WriteValueSafe((ushort)bytesWritten);
+                    writer.WriteValueSafe(bytesWritten);
                     writer.Seek(finalPosition);
                 }
                 return true;
@@ -1490,7 +1610,7 @@ namespace Unity.Netcode
             {
                 var reader = serializer.GetFastBufferReader();
                 // We will always read the expected byte count
-                reader.ReadValueSafe(out ushort expectedBytesToRead);
+                reader.ReadValueSafe(out int expectedBytesToRead);
 
                 // Save our position before we begin synchronization deserialization
                 var positionBeforeSynchronize = reader.Position;
@@ -1502,10 +1622,10 @@ namespace Unity.Netcode
                 }
                 catch (Exception ex)
                 {
-                    if (NetworkManager.LogLevel <= LogLevel.Normal)
+                    if (m_NetworkManager.LogLevel <= LogLevel.Normal)
                     {
                         NetworkLog.LogWarning($"{name} threw an exception during synchronization deserialization, this {nameof(NetworkBehaviour)} is being skipped and will not be synchronized!");
-                        if (NetworkManager.LogLevel == LogLevel.Developer)
+                        if (m_NetworkManager.LogLevel == LogLevel.Developer)
                         {
                             NetworkLog.LogError($"{ex.Message}\n {ex.StackTrace}");
                         }
@@ -1516,7 +1636,7 @@ namespace Unity.Netcode
                 var totalBytesRead = reader.Position - positionBeforeSynchronize;
                 if (totalBytesRead != expectedBytesToRead)
                 {
-                    if (NetworkManager.LogLevel <= LogLevel.Normal)
+                    if (m_NetworkManager.LogLevel <= LogLevel.Normal)
                     {
                         NetworkLog.LogWarning($"{name} read {totalBytesRead} bytes but was expected to read {expectedBytesToRead} bytes during synchronization deserialization! This {nameof(NetworkBehaviour)}({GetType().Name})is being skipped and will not be synchronized!");
                     }
@@ -1537,6 +1657,14 @@ namespace Unity.Netcode
             }
         }
 
+        /// <summary>
+        /// Use to assure a helper component invokes script during destroy in the
+        /// event that a derived class does not invoke base.OnDestroy.
+        /// </summary>
+        internal virtual void InternalOnDestroy()
+        {
+
+        }
 
         /// <summary>
         /// Invoked when the <see cref="GameObject"/> the <see cref="NetworkBehaviour"/> is attached to is destroyed.
@@ -1544,12 +1672,21 @@ namespace Unity.Netcode
         /// </summary>
         public virtual void OnDestroy()
         {
-            if (NetworkObject != null && NetworkObject.IsSpawned && IsSpawned)
+            try
+            {
+                InternalOnDestroy();
+            }
+            catch (Exception ex)
+            {
+                Debug.LogException(ex);
+            }
+
+            if (m_NetworkObject != null && m_NetworkObject.IsSpawned && IsSpawned)
             {
                 // If the associated NetworkObject is still spawned then this
                 // NetworkBehaviour will be removed from the NetworkObject's
                 // ChildNetworkBehaviours list.
-                NetworkObject.OnNetworkBehaviourDestroyed(this);
+                m_NetworkObject.OnNetworkBehaviourDestroyed(this);
             }
 
             // this seems odd to do here, but in fact especially in tests we can find ourselves
@@ -1564,9 +1701,9 @@ namespace Unity.Netcode
             }
 
 
-            for (int i = 0; i < NetworkVariableFields.Count; i++)
+            foreach (var networkVar in NetworkVariableFields)
             {
-                NetworkVariableFields[i].Dispose();
+                networkVar.Dispose();
             }
         }
     }

@@ -1,5 +1,5 @@
 ﻿{
-  "baseBranches": ["develop", "develop-2.0.0"],
+  "baseBranches": ["develop-2.0.0"],
   "dependencyDashboard": true,
 
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
@@ -16,8 +16,7 @@
     "com.unity.netcode.gameobjects/**/*",
     "Examples/**/*",
     "testproject/**/*",
-    "minimalproject/**/*",
-    "testproject-tools-integration/**/*"
+    "minimalproject/**/*"
   ],
   "packageRules": [
     // Run unity-upm-project and unity-upm-package only on weekends to reduce PR noise
@@ -28,10 +27,12 @@
         "unity-upm-package"
       ],
       "enabled": "true",
-      "schedule": [
-        "every weekend"
-      ],
+      "schedule": ["every weekend"],
       "rollbackPrs": false,
+    },
+    {
+      "groupName": "CI deps updates",
+      "matchPackagePatterns": ["^RecipeEngine", "actions/checkout", "package-ci/ubuntu-22.04"]
     }
   ],
 }

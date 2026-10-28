@@ -18,6 +18,11 @@ namespace TestProject.RuntimeTests
     {
         protected override int NumberOfClients => 0;
 
+        // TODO: [CmbServiceTests] Adapt to run with the service
+        protected override bool UseCMBService()
+        {
+            return false;
+        }
 
         protected Dictionary<uint, GameObject> m_InSceneObjectList = new Dictionary<uint, GameObject>();
 
@@ -35,7 +40,7 @@ namespace TestProject.RuntimeTests
             // the scene is loaded (i.e. IsSceneObject is null)
             var inScenePrefab = CreateNetworkObjectPrefab("NewSceneObject");
             var networkObject = inScenePrefab.GetComponent<NetworkObject>();
-            networkObject.IsSceneObject = null;
+            networkObject.InScenePlaced = true;
             networkObject.NetworkManagerOwner = m_ServerNetworkManager;
             m_InSceneObjectList.Add(networkObject.GlobalObjectIdHash, inScenePrefab);
 
@@ -44,7 +49,7 @@ namespace TestProject.RuntimeTests
             // unloading/reloading any scenes.
             inScenePrefab = CreateNetworkObjectPrefab("SetInSceneObject");
             networkObject = inScenePrefab.GetComponent<NetworkObject>();
-            networkObject.IsSceneObject = true;
+            networkObject.InScenePlaced = true;
             networkObject.NetworkManagerOwner = m_ServerNetworkManager;
             m_InSceneObjectList.Add(networkObject.GlobalObjectIdHash, inScenePrefab);
         }

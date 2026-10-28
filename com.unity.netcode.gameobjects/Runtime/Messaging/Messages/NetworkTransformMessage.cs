@@ -32,7 +32,28 @@ namespace Unity.Netcode
             }
             else
             {
-                BytesWritten = NetworkTransform.SerializeMessage(writer, targetVersion);
+                var position = writer.Position;
+                // Provides the source of the message (NetworkObject-->NetworkTransform : NetworkBehaviour).
+                BytePacker.WriteValueBitPacked(writer, NetworkTransform.NetworkObjectId);
+#if NGO_NETWORKTRANSFORMSTATE_LOGWRITESIZE
+                var networkObjectIdSize = writer.Position - position;
+#endif
+                BytePacker.WriteValueBitPacked(writer, (int)NetworkTransform.NetworkBehaviourId);
+#if NGO_NETWORKTRANSFORMSTATE_LOGWRITESIZE
+                var networkBehaviourIdSize = writer.Position - position - networkObjectIdSize;
+#endif
+
+                // Serialize the current local state.
+                writer.WriteNetworkSerializable(NetworkTransform.LocalAuthoritativeNetworkState);
+#if NGO_NETWORKTRANSFORMSTATE_LOGWRITESIZE
+                var networkTransformStateSize = writer.Position - position - networkObjectIdSize - networkBehaviourIdSize;
+#endif
+                BytesWritten = writer.Position - position;
+
+#if NGO_NETWORKTRANSFORMSTATE_LOGWRITESIZE
+                var parentInfo = writer.Position - position - networkObjectIdSize - networkBehaviourIdSize - networkTransformStateSize;
+                Debug.Log($"[NO-ID: {networkObjectIdSize}][NB-ID: {networkBehaviourIdSize}][NTState: {networkTransformStateSize}][PINFO: {parentInfo}][Total: {BytesWritten}]");
+#endif
             }
         }
 
@@ -44,12 +65,14 @@ namespace Unity.Netcode
                 Debug.LogError($"[{nameof(NetworkTransformMessage)}] System owner context was not of type {nameof(NetworkManager)}!");
                 return false;
             }
+            if (networkManager.ShutdownInProgress)
+            {
+                return false;
+            }
             var currentPosition = reader.Position;
-            var networkObjectId = (ulong)0;
-            var networkBehaviourId = 0;
 
-            ByteUnpacker.ReadValueBitPacked(reader, out networkObjectId);
-            var isSpawnedLocally = networkManager.SpawnManager.SpawnedObjects.ContainsKey(networkObjectId);
+            ByteUnpacker.ReadValueBitPacked(reader, out ulong networkObjectId);
+            var isSpawnedLocally = networkManager.SpawnManager.SpawnedObjects.TryGetValue(networkObjectId, out var networkObject);
 
             // Only defer if the NetworkObject is not spawned yet and the local NetworkManager is not running as a DAHost.
             if (!isSpawnedLocally && !networkManager.DAHost)
@@ -61,27 +84,25 @@ namespace Unity.Netcode
             // While the below check and assignment might seem out of place, this is specific to running in DAHost mode when a NetworkObject is
             // hidden from the DAHost but is visible to other clients. Since the DAHost needs to forward updates to the clients, we ignore processing
             // this message locally
-            var networkObject = (NetworkObject)null;
             var isServerAuthoritative = false;
             var ownerAuthoritativeServerSide = false;
 
             // Get the behaviour index
-            ByteUnpacker.ReadValueBitPacked(reader, out networkBehaviourId);
+            ByteUnpacker.ReadValueBitPacked(reader, out int networkBehaviourId);
 
             if (isSpawnedLocally)
             {
-                networkObject = networkManager.SpawnManager.SpawnedObjects[networkObjectId];
-                if (networkObject.ChildNetworkBehaviours.Count <= networkBehaviourId || networkObject.ChildNetworkBehaviours[networkBehaviourId] == null)
+                if (!networkObject.ChildNetworkBehaviours.TryGetValue((ushort)networkBehaviourId, out var behaviour) || behaviour == null)
                 {
                     Debug.LogError($"[{nameof(NetworkTransformMessage)}][Invalid] Targeted {nameof(NetworkTransform)}, {nameof(NetworkBehaviour.NetworkBehaviourId)} ({networkBehaviourId}), does not exist! Make sure you are not spawning {nameof(NetworkObject)}s with disabled {nameof(GameObject)}s that have {nameof(NetworkBehaviour)} components on them.");
                     return false;
                 }
 
                 // Get the target NetworkTransform
-                var transform = networkObject.ChildNetworkBehaviours[networkBehaviourId] as NetworkTransform;
+                var transform = behaviour as NetworkTransform;
                 if (transform == null)
                 {
-                    Debug.LogError($"[{nameof(NetworkTransformMessage)}][Invalid] Targeted {nameof(NetworkTransform)}, {nameof(NetworkBehaviour.NetworkBehaviourId)} ({networkBehaviourId}), does not exist! Make sure you are not spawning {nameof(NetworkObject)}s with disabled {nameof(GameObject)}s that have {nameof(NetworkBehaviour)} components on them.");
+                    Debug.LogError($"[{nameof(NetworkTransformMessage)}][Invalid] Targeted {nameof(NetworkTransform)}, {nameof(NetworkBehaviour.NetworkBehaviourId)} ({networkBehaviourId}), does not exist on {networkObject.name}! Make sure you are not spawning {nameof(NetworkObject)}s with disabled {nameof(GameObject)}s that have {nameof(NetworkBehaviour)} components on them.");
                     return false;
                 }
 
@@ -89,7 +110,9 @@ namespace Unity.Netcode
                 isServerAuthoritative = NetworkTransform.IsServerAuthoritative();
                 ownerAuthoritativeServerSide = !isServerAuthoritative && networkManager.IsServer;
 
+                // Deserialize the inbound NetworkTransformState
                 reader.ReadNetworkSerializableInPlace(ref NetworkTransform.InboundState);
+
                 NetworkTransform.InboundState.LastSerializedSize = reader.Position - currentPosition;
             }
             else
@@ -114,22 +137,25 @@ namespace Unity.Netcode
             {
                 if (ownerAuthoritativeServerSide)
                 {
-                    var targetCount = 1;
-
-                    if (networkManager.DistributedAuthorityMode && networkManager.DAHost)
-                    {
-                        ByteUnpacker.ReadValueBitPacked(reader, out targetCount);
-                    }
+                    var targetCount = networkObject.Observers.Count;
 
                     var targetIds = stackalloc ulong[targetCount];
 
                     if (networkManager.DistributedAuthorityMode && networkManager.DAHost)
                     {
-                        var targetId = (ulong)0;
-                        for (int i = 0; i < targetCount; i++)
+                        // Using foreach loop as opposed to for loop using targetCount as maximum
+                        // observers to doulbe check that the number of observers in the list of
+                        // observers matches the targetCount.
+                        var count = 0;
+                        foreach (var targetId in networkObject.Observers)
                         {
-                            ByteUnpacker.ReadValueBitPacked(reader, out targetId);
-                            targetIds[i] = targetId;
+                            targetIds[count] = targetId;
+                            // Sanity check, this should never happen.
+                            if (count >= targetCount)
+                            {
+                                Debug.LogError($"[{nameof(NetworkTransformMessage)}] Exceeded total number of observers!");
+                            }
+                            count++;
                         }
                     }
 
@@ -208,7 +234,9 @@ namespace Unity.Netcode
                 Debug.LogError($"[{nameof(NetworkTransformMessage)}][Dropped] Reciever {nameof(NetworkTransform)} was not set!");
                 return;
             }
-            NetworkTransform.TransformStateUpdate(context.SenderId);
+
+            // Update the state
+            NetworkTransform.TransformStateUpdate();
         }
     }
 }

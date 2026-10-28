@@ -158,10 +158,10 @@ namespace Unity.Netcode
                 {
                     if (sobj.SpawnWithObservers && (sobj.CheckObjectVisibility == null || sobj.CheckObjectVisibility(OwnerClientId)))
                     {
-                        sobj.Observers.Add(OwnerClientId);
+                        sobj.AddObserver(OwnerClientId);
                         // In distributed authority mode, we send the currently known observers of each NetworkObject to the client being synchronized.
-                        var sceneObject = sobj.GetMessageSceneObject(OwnerClientId, IsDistributedAuthority);
-                        sceneObject.Serialize(writer);
+                        var serializedObject = sobj.SerializeSpawnedObject(OwnerClientId, IsDistributedAuthority);
+                        serializedObject.Serialize(writer);
                         ++sceneObjectCount;
                     }
                 }
@@ -246,10 +246,31 @@ namespace Unity.Netcode
         public void Handle(ref NetworkContext context)
         {
             var networkManager = (NetworkManager)context.SystemOwner;
+
+            if (networkManager.CMBServiceConnection && networkManager.LocalClient.IsSessionOwner && networkManager.NetworkConfig.EnableSceneManagement)
+            {
+                if (networkManager.LocalClientId != OwnerClientId)
+                {
+                    if (NetworkLog.CurrentLogLevel <= LogLevel.Developer)
+                    {
+                        NetworkLog.LogInfo($"[Session Owner] Received connection approved for Client-{OwnerClientId}! Synchronizing...");
+                    }
+
+                    networkManager.SceneManager.SynchronizeNetworkObjects(OwnerClientId);
+                }
+                else
+                {
+                    NetworkLog.LogWarning($"[Client-{OwnerClientId}] Receiving duplicate connection approved. Client is already connected!");
+                }
+                ConnectedClientIds.Dispose();
+                return;
+            }
+
             if (NetworkLog.CurrentLogLevel <= LogLevel.Developer)
             {
                 NetworkLog.LogInfo($"[Client-{OwnerClientId}] Connection approved! Synchronizing...");
             }
+
             networkManager.LocalClientId = OwnerClientId;
             networkManager.MessageManager.SetLocalClientId(networkManager.LocalClientId);
             networkManager.NetworkMetrics.SetConnectionId(networkManager.LocalClientId);
@@ -257,9 +278,16 @@ namespace Unity.Netcode
             if (networkManager.DistributedAuthorityMode)
             {
                 networkManager.SetSessionOwner(GetSessionOwner());
-                if (networkManager.LocalClient.IsSessionOwner && networkManager.NetworkConfig.EnableSceneManagement)
+                if (networkManager.LocalClient.IsSessionOwner)
                 {
-                    networkManager.SceneManager.InitializeScenesLoaded();
+                    if (networkManager.NetworkConfig.EnableSceneManagement)
+                    {
+                        networkManager.SceneManager.InitializeScenesLoaded();
+                    }
+                    if (networkManager.NetworkConfig.ConnectionApproval && networkManager.LogLevel <= LogLevel.Developer)
+                    {
+                        NetworkLog.LogWarning($"{nameof(NetworkConfig.ConnectionApproval)} is enabled but is not supported when using a distributed authority topology. The {nameof(NetworkManager.ConnectionApprovalCallback)} will not be invoked.");
+                    }
                 }
             }
 
@@ -273,14 +301,19 @@ namespace Unity.Netcode
             // Stop the client-side approval timeout coroutine since we are approved.
             networkManager.ConnectionManager.StopClientApprovalCoroutine();
 
-            networkManager.ConnectionManager.ConnectedClientIds.Clear();
             foreach (var clientId in ConnectedClientIds)
             {
-                if (!networkManager.ConnectionManager.ConnectedClientIds.Contains(clientId))
+                // DANGO-TODO: Revisit the entire connection sequence and determine why we would need to check both cases as we shouldn't have to =or= we could
+                // try removing this after the Rust server connection sequence stuff is resolved. (Might be only needed if scene management is disabled)
+                // If there is any disconnect between the connection sequence of Ids vs ConnectedClients, then add the client.
+                if (!networkManager.ConnectionManager.ConnectedClientIds.Contains(clientId) || !networkManager.ConnectionManager.ConnectedClients.ContainsKey(clientId))
                 {
                     networkManager.ConnectionManager.AddClient(clientId);
                 }
             }
+
+            // Dispose after it has been used.
+            ConnectedClientIds.Dispose();
 
             // Only if scene management is disabled do we handle NetworkObject synchronization at this point
             if (!networkManager.NetworkConfig.EnableSceneManagement)
@@ -309,12 +342,12 @@ namespace Unity.Netcode
                 // to create a list to hold the data. This is a breach of convention for performance reasons.
                 for (ushort i = 0; i < sceneObjectCount; i++)
                 {
-                    var sceneObject = new NetworkObject.SceneObject();
-                    sceneObject.Deserialize(m_ReceivedSceneObjectData);
-                    NetworkObject.AddSceneObject(sceneObject, m_ReceivedSceneObjectData, networkManager);
+                    var serializedObject = new NetworkObject.SerializedObject();
+                    serializedObject.Deserialize(m_ReceivedSceneObjectData);
+                    NetworkObject.DeserializeAndSpawnObject(serializedObject, m_ReceivedSceneObjectData, networkManager);
                 }
 
-                if (networkManager.AutoSpawnPlayerPrefabClientSide)
+                if (networkManager.DistributedAuthorityMode && networkManager.AutoSpawnPlayerPrefabClientSide)
                 {
                     networkManager.ConnectionManager.CreateAndSpawnPlayer(OwnerClientId);
                 }
@@ -340,20 +373,17 @@ namespace Unity.Netcode
 
                     if (!networkManager.SceneManager.IsRestoringSession)
                     {
-                        // Synchronize the service with the initial session owner's loaded scenes and spawned objects
-                        networkManager.SceneManager.SynchronizeNetworkObjects(NetworkManager.ServerClientId, true);
-
                         // Spawn any in-scene placed NetworkObjects
                         networkManager.SpawnManager.ServerSpawnSceneObjectsOnStartSweep();
+
+                        // Synchronize the service with the initial session owner's loaded scenes and spawned objects
+                        networkManager.SceneManager.SynchronizeNetworkObjects(NetworkManager.ServerClientId, true);
 
                         // Spawn the local player of the session owner
                         if (networkManager.AutoSpawnPlayerPrefabClientSide)
                         {
                             networkManager.ConnectionManager.CreateAndSpawnPlayer(OwnerClientId);
                         }
-
-                        // Synchronize the service with the initial session owner's loaded scenes and spawned objects
-                        networkManager.SceneManager.SynchronizeNetworkObjects(NetworkManager.ServerClientId, true);
 
                         // With scene management enabled and since the session owner doesn't send a scene event synchronize to itself,
                         // we need to notify the session owner that everything should be synchronized/spawned at this time.
@@ -365,7 +395,6 @@ namespace Unity.Netcode
                     }
                 }
             }
-            ConnectedClientIds.Dispose();
         }
     }
 }

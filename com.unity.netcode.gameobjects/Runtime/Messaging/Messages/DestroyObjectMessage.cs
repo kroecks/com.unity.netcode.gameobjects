@@ -6,18 +6,12 @@ namespace Unity.Netcode
     internal struct DestroyObjectMessage : INetworkMessage, INetworkSerializeByMemcpy
     {
         private const int k_OptimizeDestroyObjectMessage = 1;
-        public int Version => k_OptimizeDestroyObjectMessage;
+        private const int k_AllowDestroyGameInPlaced = 2;
+        public int Version => k_AllowDestroyGameInPlaced;
 
         private const string k_Name = "DestroyObjectMessage";
 
         public ulong NetworkObjectId;
-
-        /// <summary>
-        /// Used to communicate whether to destroy the associated game object.
-        /// Should be false if the object is InScenePlaced and true otherwise
-        /// </summary>
-        public bool DestroyGameObject;
-        private byte m_DestroyFlags;
 
         internal int DeferredDespawnTick;
         // Temporary until we make this a list
@@ -25,54 +19,47 @@ namespace Unity.Netcode
 
         internal bool IsDistributedAuthority;
 
-        private const byte k_ClientTargetedDestroy = 0x01;
-        private const byte k_DeferredDespawn = 0x02;
+        private const byte k_IsTargetedDestroy = 0x01;
+        private const byte k_IsDeferredDespawn = 0x02;
+        private const byte k_DestroyGameObject = 0x04;
 
-        internal bool IsTargetedDestroy
-        {
-            get => GetFlag(k_ClientTargetedDestroy);
+        internal bool IsTargetedDestroy;
 
-            set => SetFlag(value, k_ClientTargetedDestroy);
-        }
-
-        private bool IsDeferredDespawn
-        {
-            get => GetFlag(k_DeferredDespawn);
-
-            set => SetFlag(value, k_DeferredDespawn);
-        }
-
-        private bool GetFlag(int flag)
-        {
-            return (m_DestroyFlags & flag) != 0;
-        }
-
-        private void SetFlag(bool set, byte flag)
-        {
-            if (set) { m_DestroyFlags = (byte)(m_DestroyFlags | flag); }
-            else { m_DestroyFlags = (byte)(m_DestroyFlags & ~flag); }
-        }
+        /// <summary>
+        /// Used to communicate whether to destroy the associated game object.
+        /// Should be false if the object is InScenePlaced and true otherwise
+        /// </summary>
+        public bool DestroyGameObject;
 
         public void Serialize(FastBufferWriter writer, int targetVersion)
         {
             // Set deferred despawn flag
-            IsDeferredDespawn = DeferredDespawnTick > 0;
+            var isDeferredDespawn = DeferredDespawnTick > 0;
+
+            byte bitset = 0x00;
+            if (IsTargetedDestroy) { bitset |= k_IsTargetedDestroy; }
+            if (isDeferredDespawn) { bitset |= k_IsDeferredDespawn; }
+            if (DestroyGameObject) { bitset |= k_DestroyGameObject; }
 
             BytePacker.WriteValueBitPacked(writer, NetworkObjectId);
 
             if (IsDistributedAuthority)
             {
-                writer.WriteByteSafe(m_DestroyFlags);
+                writer.WriteByteSafe(bitset);
 
                 if (IsTargetedDestroy)
                 {
                     BytePacker.WriteValueBitPacked(writer, TargetClientId);
                 }
 
-                if (targetVersion < k_OptimizeDestroyObjectMessage || IsDeferredDespawn)
+                if (targetVersion < k_OptimizeDestroyObjectMessage || isDeferredDespawn)
                 {
                     BytePacker.WriteValueBitPacked(writer, DeferredDespawnTick);
                 }
+            }
+            else if (targetVersion >= k_AllowDestroyGameInPlaced)
+            {
+                writer.WriteByteSafe(bitset);
             }
 
             if (targetVersion < k_OptimizeDestroyObjectMessage)
@@ -92,21 +79,31 @@ namespace Unity.Netcode
             ByteUnpacker.ReadValueBitPacked(reader, out NetworkObjectId);
             if (networkManager.DistributedAuthorityMode)
             {
-                reader.ReadByteSafe(out m_DestroyFlags);
+                reader.ReadByteSafe(out byte bitset);
+                IsTargetedDestroy = (bitset & k_IsTargetedDestroy) != 0;
+                var isDeferredDespawn = (bitset & k_IsDeferredDespawn) != 0;
+                DestroyGameObject = (bitset & k_DestroyGameObject) != 0;
+
                 if (IsTargetedDestroy)
                 {
                     ByteUnpacker.ReadValueBitPacked(reader, out TargetClientId);
                 }
 
-                if (receivedMessageVersion < k_OptimizeDestroyObjectMessage || IsDeferredDespawn)
+                if (receivedMessageVersion < k_OptimizeDestroyObjectMessage || isDeferredDespawn)
                 {
                     ByteUnpacker.ReadValueBitPacked(reader, out DeferredDespawnTick);
                 }
             }
+            else if (receivedMessageVersion >= k_AllowDestroyGameInPlaced)
+            {
+                reader.ReadByteSafe(out byte bitset);
+                DestroyGameObject = (bitset & k_DestroyGameObject) != 0;
+            }
 
             if (receivedMessageVersion < k_OptimizeDestroyObjectMessage)
             {
-                reader.ReadValueSafe(out DestroyGameObject);
+                reader.ReadValueSafe(out bool destroyGameObject);
+                DestroyGameObject = destroyGameObject;
             }
 
             if (networkManager.SpawnManager.SpawnedObjects.ContainsKey(NetworkObjectId))
@@ -115,7 +112,7 @@ namespace Unity.Netcode
             }
 
             // Client-Server mode we always defer where in distributed authority mode we only defer if it is not a targeted destroy
-            if (!networkManager.DistributedAuthorityMode || (networkManager.DistributedAuthorityMode && !IsTargetedDestroy))
+            if (!networkManager.DistributedAuthorityMode || !networkManager.IsConnectedClient || (networkManager.DistributedAuthorityMode && !IsTargetedDestroy))
             {
                 networkManager.DeferredMessageManager.DeferMessage(IDeferredNetworkMessageManager.TriggerType.OnSpawn, NetworkObjectId, reader, ref context, k_Name);
             }
@@ -169,7 +166,7 @@ namespace Unity.Netcode
             }
 
             // Otherwise just despawn the NetworkObject right now
-            networkManager.SpawnManager.OnDespawnNonAuthorityObject(networkObject);
+            networkManager.SpawnManager.OnDespawnNonAuthorityObject(networkObject, DestroyGameObject);
             networkManager.NetworkMetrics.TrackObjectDestroyReceived(context.SenderId, networkObject, context.MessageSize);
         }
 
@@ -189,13 +186,13 @@ namespace Unity.Netcode
                 DeferredDespawnTick = DeferredDespawnTick,
             };
             var ownerClientId = networkObject == null ? senderId : networkObject.OwnerClientId;
-            var clientIds = networkObject == null ? networkManager.ConnectedClientsIds.ToList() : networkObject.Observers.ToList();
-
+            var clientIds = networkObject == null ? networkManager.ConnectionManager.ConnectedClientIds : networkObject.Observers.ToList();
+            var networkDelivery = MessageDeliveryType<DestroyObjectMessage>.DefaultDelivery;
             foreach (var clientId in clientIds)
             {
                 if (clientId != networkManager.LocalClientId && clientId != ownerClientId)
                 {
-                    networkManager.ConnectionManager.SendMessage(ref message, NetworkDelivery.ReliableSequenced, clientId);
+                    networkManager.ConnectionManager.SendMessage(ref message, networkDelivery, clientId);
                 }
             }
         }
@@ -208,7 +205,7 @@ namespace Unity.Netcode
         {
             networkObject.DeferredDespawnTick = DeferredDespawnTick;
             var hasCallback = networkObject.OnDeferredDespawnComplete != null;
-            networkManager.SpawnManager.DeferDespawnNetworkObject(NetworkObjectId, DeferredDespawnTick, hasCallback);
+            networkManager.SpawnManager.DeferDespawnNetworkObject(NetworkObjectId, DeferredDespawnTick, hasCallback, DestroyGameObject);
         }
     }
 }

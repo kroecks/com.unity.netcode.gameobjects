@@ -342,8 +342,8 @@ namespace TestProject.ManualTests
             {
                 StartSpawningBoxes();
             }
-            else //Handle case where spawning coroutine is running but we set our spawn rate to zero
-            if (SpawnsPerSecond == 0 && m_IsSpawningObjects)
+            //Handle case where spawning coroutine is running but we set our spawn rate to zero
+            else if (SpawnsPerSecond == 0 && m_IsSpawningObjects)
             {
                 m_IsSpawningObjects = false;
                 InternalStopCoroutine();
@@ -432,8 +432,7 @@ namespace TestProject.ManualTests
             var obj = GetObject();
             if (obj != null)
             {
-                obj.transform.position = position;
-                obj.transform.rotation = rotation;
+                obj.transform.SetPositionAndRotation(position, rotation);
                 return obj.GetComponent<NetworkObject>();
             }
             return null;

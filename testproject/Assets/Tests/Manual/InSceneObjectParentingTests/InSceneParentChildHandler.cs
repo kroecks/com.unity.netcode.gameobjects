@@ -231,8 +231,8 @@ namespace TestProject.ManualTests
             m_TargetLocalRotation = GenerateVector3(RotationMin, RotationMax);
             var scale = Random.Range(ScaleMin, ScaleMax);
             m_TargetLocalScale = Vector3.one * scale;
-            transform.position = m_TargetLocalPosition;
-            transform.rotation = Quaternion.Euler(m_TargetLocalRotation);
+
+            transform.SetPositionAndRotation(m_TargetLocalPosition, Quaternion.Euler(m_TargetLocalRotation));
             transform.localScale = m_TargetLocalScale;
 
             base.OnNetworkObjectParentChanged(parentNetworkObject);
@@ -371,7 +371,7 @@ namespace TestProject.ManualTests
         {
             m_RequestSent = false;
             var errorCount = 0;
-            var autoSync = ParentingAutoSyncManager.ServerInstance;
+            var autoSync = ParentingAutoSyncManager.AuthorityInstance;
             var position = Vector3.zero;
             var rotation = Vector3.zero;
             var scale = Vector3.zero;

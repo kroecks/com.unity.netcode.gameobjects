@@ -8,11 +8,8 @@ namespace Unity.Netcode
         public override void Dispose()
         {
             m_LocalSendRpcTarget.Dispose();
-            if (m_GroupSendTarget != null)
-            {
-                m_GroupSendTarget.Target.Dispose();
-                m_GroupSendTarget = null;
-            }
+            m_GroupSendTarget?.Target.Dispose();
+            m_GroupSendTarget = null;
         }
 
         internal override void Send(NetworkBehaviour behaviour, ref RpcMessage message, NetworkDelivery delivery, RpcParams rpcParams)
@@ -44,7 +41,7 @@ namespace Unity.Netcode
             }
             else
             {
-                foreach (var clientId in m_NetworkManager.ConnectedClientsIds)
+                foreach (var clientId in ConnectionManager.ConnectedClientIds)
                 {
                     if (clientId == NetworkManager.ServerClientId)
                     {

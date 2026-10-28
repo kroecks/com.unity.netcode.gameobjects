@@ -15,6 +15,12 @@ namespace TestProject.RuntimeTests
     {
         protected override int NumberOfClients => 1;
 
+        // TODO: [CmbServiceTests] Adapt to run with the service
+        protected override bool UseCMBService()
+        {
+            return false;
+        }
+
         public ServerDisconnectsClientTest(NetworkTopologyTypes networkTopologyType) : base(networkTopologyType) { }
 
         protected override void OnCreatePlayerPrefab()
@@ -41,7 +47,7 @@ namespace TestProject.RuntimeTests
                 base.OnNetworkSpawn();
             }
 
-            [ServerRpc(RequireOwnership = false)]
+            [Rpc(SendTo.Server)]
             public void ClientToServerRpc()
             {
                 Debug.Log($"Received {nameof(ClientToServerRpc)}");

@@ -34,9 +34,9 @@ namespace Unity.Netcode
     internal class NetworkMessageManager : IDisposable
     {
         public bool StopProcessing = false;
-        private static Type s_ConnectionApprovedType = typeof(ConnectionApprovedMessage);
-        private static Type s_ConnectionRequestType = typeof(ConnectionRequestMessage);
-        private static Type s_DisconnectReasonType = typeof(DisconnectReasonMessage);
+        private static readonly Type k_ConnectionApprovedType = typeof(ConnectionApprovedMessage);
+        private static readonly Type k_ConnectionRequestType = typeof(ConnectionRequestMessage);
+        private static readonly Type k_DisconnectReasonType = typeof(DisconnectReasonMessage);
 
         private struct ReceiveQueueItem
         {
@@ -148,8 +148,6 @@ namespace Unity.Netcode
                 throw;
             }
         }
-
-        internal static bool EnableMessageOrderConsoleLog = false;
 
         public void Dispose()
         {
@@ -492,6 +490,11 @@ namespace Unity.Netcode
 
         internal void CleanupDisconnectedClients()
         {
+            if (m_DisconnectedClients.Count == 0)
+            {
+                return;
+            }
+
             foreach (var clientId in m_DisconnectedClients)
             {
                 CleanupDisconnectedClient(clientId);
@@ -500,9 +503,9 @@ namespace Unity.Netcode
             m_DisconnectedClients.Clear();
         }
 
-        public static int CreateMessageAndGetVersion<T>() where T : INetworkMessage, new()
+        public static int CreateMessageAndGetVersion<T>() where T : struct, INetworkMessage
         {
-            return new T().Version;
+            return default(T).Version;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -535,16 +538,16 @@ namespace Unity.Netcode
 
 
 
-        public static void ReceiveMessage<T>(FastBufferReader reader, ref NetworkContext context, NetworkMessageManager manager) where T : INetworkMessage, new()
+        public static void ReceiveMessage<T>(FastBufferReader reader, ref NetworkContext context, NetworkMessageManager manager) where T : struct, INetworkMessage
         {
             var messageType = typeof(T);
-            var message = new T();
+            var message = default(T);
             var messageVersion = 0;
 
             // Special cases because these are the messages that carry the version info - thus the version info isn't
             // populated yet when we get these. The first part of these messages always has to be the version data
             // and can't change.
-            if (messageType != s_ConnectionRequestType && messageType != s_ConnectionApprovedType && messageType != s_DisconnectReasonType && context.SenderId != manager.m_LocalClientId)
+            if (messageType != k_ConnectionRequestType && messageType != k_ConnectionApprovedType && messageType != k_DisconnectReasonType && context.SenderId != manager.m_LocalClientId)
             {
                 messageVersion = manager.GetMessageVersion(messageType, context.SenderId, true);
                 if (messageVersion < 0)
@@ -598,7 +601,7 @@ namespace Unity.Netcode
                 var messageVersion = 0;
                 // Special case because this is the message that carries the version info - thus the version info isn't populated yet when we get this.
                 // The first part of this message always has to be the version data and can't change.
-                if (typeof(TMessageType) != s_ConnectionRequestType)
+                if (typeof(TMessageType) != k_ConnectionRequestType)
                 {
                     messageVersion = GetMessageVersion(typeof(TMessageType), clientIds[i]);
                     if (messageVersion < 0)
@@ -630,8 +633,9 @@ namespace Unity.Netcode
             return largestSerializedSize;
         }
 
-        internal unsafe int SendPreSerializedMessage<TMessageType>(in FastBufferWriter tmpSerializer, int maxSize, ref TMessageType message, NetworkDelivery delivery, in IReadOnlyList<ulong> clientIds, int messageVersionFilter)
+        internal unsafe int SendPreSerializedMessage<TMessageType, TClientIdListType>(in FastBufferWriter tmpSerializer, int maxSize, ref TMessageType message, NetworkDelivery delivery, in TClientIdListType clientIds, int messageVersionFilter)
             where TMessageType : INetworkMessage
+            where TClientIdListType : IReadOnlyList<ulong>
         {
             using var headerSerializer = new FastBufferWriter(FastBufferWriter.GetWriteSize<NetworkMessageHeader>(), Allocator.Temp);
 
@@ -652,7 +656,7 @@ namespace Unity.Netcode
 
                 // Special case because this is the message that carries the version info - thus the version info isn't populated yet when we get this.
                 // The first part of this message always has to be the version data and can't change.
-                if (typeof(TMessageType) != s_ConnectionRequestType)
+                if (typeof(TMessageType) != k_ConnectionRequestType)
                 {
                     var messageVersion = GetMessageVersion(typeof(TMessageType), clientIds[i]);
                     if (messageVersion < 0)
@@ -736,7 +740,7 @@ namespace Unity.Netcode
             // Special case because this is the message that carries the version info - thus the version info isn't
             // populated yet when we get this. The first part of this message always has to be the version data
             // and can't change.
-            if (typeof(TMessageType) != s_ConnectionRequestType)
+            if (typeof(TMessageType) != k_ConnectionRequestType)
             {
                 messageVersion = GetMessageVersion(typeof(TMessageType), clientId);
                 if (messageVersion < 0)
@@ -846,7 +850,7 @@ namespace Unity.Netcode
                     }
 
                     queueItem.Writer.Seek(0);
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
+#if DEBUG
                     // Skipping the Verify and sneaking the write mark in because we know it's fine.
                     queueItem.Writer.Handle->AllowedWriteMark = sizeof(NetworkBatchHeader);
 #endif

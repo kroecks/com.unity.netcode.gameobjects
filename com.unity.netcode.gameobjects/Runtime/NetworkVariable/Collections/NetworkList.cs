@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 using Unity.Collections;
 
 namespace Unity.Netcode
@@ -9,6 +10,7 @@ namespace Unity.Netcode
     /// </summary>
     /// <typeparam name="T">The type for the list</typeparam>
     [GenerateSerializationForGenericParameter(0)]
+    [Serializable]
     public class NetworkList<T> : NetworkVariableBase where T : unmanaged, IEquatable<T>
     {
         private NativeList<T> m_List = new NativeList<T>(64, Allocator.Persistent);
@@ -135,6 +137,15 @@ namespace Unity.Netcode
             }
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private T ReadValue(FastBufferReader reader)
+        {
+            // T is constrained to unmanaged, use default rather than new() to avoid an allocation.
+            var value = default(T);
+            NetworkVariableSerialization<T>.Serializer.Read(reader, ref value);
+            return value;
+        }
+
         /// <inheritdoc cref="NetworkVariable{T}.WriteField"/>
         public override void WriteField(FastBufferWriter writer)
         {
@@ -152,9 +163,7 @@ namespace Unity.Netcode
             reader.ReadValueSafe(out ushort count);
             for (int i = 0; i < count; i++)
             {
-                var value = new T();
-                NetworkVariableSerialization<T>.Serializer.Read(reader, ref value);
-                m_List.Add(value);
+                m_List.Add(ReadValue(reader));
             }
         }
 
@@ -176,8 +185,7 @@ namespace Unity.Netcode
                 {
                     case NetworkListEvent<T>.EventType.Add:
                         {
-                            var value = new T();
-                            NetworkVariableSerialization<T>.Serializer.Read(reader, ref value);
+                            var value = ReadValue(reader);
                             m_List.Add(value);
 
                             if (OnListChanged != null)
@@ -186,7 +194,7 @@ namespace Unity.Netcode
                                 {
                                     Type = eventType,
                                     Index = m_List.Length - 1,
-                                    Value = m_List[m_List.Length - 1]
+                                    Value = value
                                 });
                             }
 
@@ -196,7 +204,7 @@ namespace Unity.Netcode
                                 {
                                     Type = eventType,
                                     Index = m_List.Length - 1,
-                                    Value = m_List[m_List.Length - 1]
+                                    Value = value
                                 });
                                 // Preserve the legacy way of handling this
                                 if (keepDirtyDelta)
@@ -209,8 +217,7 @@ namespace Unity.Netcode
                     case NetworkListEvent<T>.EventType.Insert:
                         {
                             ByteUnpacker.ReadValueBitPacked(reader, out int index);
-                            var value = new T();
-                            NetworkVariableSerialization<T>.Serializer.Read(reader, ref value);
+                            var value = ReadValue(reader);
 
                             if (index < m_List.Length)
                             {
@@ -228,7 +235,7 @@ namespace Unity.Netcode
                                 {
                                     Type = eventType,
                                     Index = index,
-                                    Value = m_List[index]
+                                    Value = value
                                 });
                             }
 
@@ -238,7 +245,7 @@ namespace Unity.Netcode
                                 {
                                     Type = eventType,
                                     Index = index,
-                                    Value = m_List[index]
+                                    Value = value
                                 });
                                 // Preserve the legacy way of handling this
                                 if (keepDirtyDelta)
@@ -250,8 +257,7 @@ namespace Unity.Netcode
                         break;
                     case NetworkListEvent<T>.EventType.Remove:
                         {
-                            var value = new T();
-                            NetworkVariableSerialization<T>.Serializer.Read(reader, ref value);
+                            var value = ReadValue(reader);
                             int index = m_List.IndexOf(value);
                             if (index == -1)
                             {
@@ -321,8 +327,7 @@ namespace Unity.Netcode
                     case NetworkListEvent<T>.EventType.Value:
                         {
                             ByteUnpacker.ReadValueBitPacked(reader, out int index);
-                            var value = new T();
-                            NetworkVariableSerialization<T>.Serializer.Read(reader, ref value);
+                            var value = ReadValue(reader);
                             if (index >= m_List.Length)
                             {
                                 throw new Exception("Shouldn't be here, index is higher than list length");
@@ -428,7 +433,7 @@ namespace Unity.Netcode
         public void Add(T item)
         {
             // check write permissions
-            if (!CanClientWrite(m_NetworkManager.LocalClientId))
+            if (CannotWrite())
             {
                 LogWritePermissionError();
                 return;
@@ -455,7 +460,7 @@ namespace Unity.Netcode
         public void Clear()
         {
             // check write permissions
-            if (!CanClientWrite(m_NetworkManager.LocalClientId))
+            if (CannotWrite())
             {
                 LogWritePermissionError();
                 return;
@@ -493,7 +498,7 @@ namespace Unity.Netcode
         public bool Remove(T item)
         {
             // check write permissions
-            if (!CanClientWrite(m_NetworkManager.LocalClientId))
+            if (CannotWrite())
             {
                 LogWritePermissionError();
                 return false;
@@ -542,7 +547,7 @@ namespace Unity.Netcode
         public void Insert(int index, T item)
         {
             // check write permissions
-            if (!CanClientWrite(m_NetworkManager.LocalClientId))
+            if (CannotWrite())
             {
                 LogWritePermissionError();
                 return;
@@ -578,7 +583,7 @@ namespace Unity.Netcode
         public void RemoveAt(int index)
         {
             // check write permissions
-            if (!CanClientWrite(m_NetworkManager.LocalClientId))
+            if (CannotWrite())
             {
                 LogWritePermissionError();
                 return;
@@ -598,6 +603,49 @@ namespace Unity.Netcode
         }
 
         /// <summary>
+        /// Sets the element at the specified index in the <see cref="NetworkList{T}"/>.
+        /// </summary>
+        /// <remarks>
+        /// This method checks for write permissions and equality before setting and updating the value.
+        /// </remarks>
+        /// <param name="index">The zero-based index of the element to set.</param>
+        /// <param name="value">The new value to set at the given index</param>
+        /// <param name="forceUpdate">
+        /// Ignores the equality check when setting the value.
+        /// This option can send unnecessary updates to all clients when the value hasn't changed.
+        /// </param>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public void Set(int index, T value, bool forceUpdate = false)
+        {
+            // check write permissions
+            if (CannotWrite())
+            {
+                LogWritePermissionError();
+                return;
+            }
+
+            var previousValue = m_List[index];
+
+            // Only trigger an event if the value has changed
+            if (!forceUpdate && NetworkVariableSerialization<T>.AreEqual(ref previousValue, ref value))
+            {
+                return;
+            }
+
+            m_List[index] = value;
+
+            var listEvent = new NetworkListEvent<T>()
+            {
+                Type = NetworkListEvent<T>.EventType.Value,
+                Index = index,
+                Value = value,
+                PreviousValue = previousValue
+            };
+
+            HandleAddListEvent(listEvent);
+        }
+
+        /// <summary>
         /// Gets or sets the element at the specified index in the <see cref="NetworkList{T}"/>.
         /// </summary>
         /// <remarks>
@@ -608,28 +656,25 @@ namespace Unity.Netcode
         public T this[int index]
         {
             get => m_List[index];
-            set
-            {
-                // check write permissions
-                if (!CanClientWrite(m_NetworkManager.LocalClientId))
-                {
-                    LogWritePermissionError();
-                    return;
-                }
+            set => Set(index, value);
+        }
 
-                var previousValue = m_List[index];
-                m_List[index] = value;
-
-                var listEvent = new NetworkListEvent<T>()
-                {
-                    Type = NetworkListEvent<T>.EventType.Value,
-                    Index = index,
-                    Value = value,
-                    PreviousValue = previousValue
-                };
-
-                HandleAddListEvent(listEvent);
-            }
+        /// <summary>
+        /// Gets a **zero‑allocation**, <see cref="NativeArray{T}.ReadOnly"/> view over the current
+        /// elements of this <see cref="NetworkList{T}"/>.
+        /// </summary>
+        /// <remarks>
+        /// The returned array stays valid **only until** the list is mutated (add, remove,
+        /// clear, resize) or <see cref="Dispose()"/> is called on the container.  Continuing to use
+        /// the array after it is invalid will result in undefined behaviour;
+        /// callers are responsible for ensuring a safe lifetime.
+        /// </remarks>
+        /// <returns>
+        /// A <see cref="NativeArray{T}.ReadOnly"/> reference that shares the same backing memory as this list.
+        /// </returns>
+        public NativeArray<T>.ReadOnly AsNativeArray()
+        {
+            return m_List.AsReadOnly();
         }
 
         private void HandleAddListEvent(NetworkListEvent<T> listEvent)
@@ -642,14 +687,8 @@ namespace Unity.Netcode
         /// <summary>
         /// This method should not be used. It is left over from a previous interface
         /// </summary>
-        public int LastModifiedTick
-        {
-            get
-            {
-                // todo: implement proper network tick for NetworkList
-                return NetworkTickSystem.NoTick;
-            }
-        }
+        [Obsolete("This property is no longer used and will be removed in a future version.")]
+        public int LastModifiedTick => NetworkTickSystem.NoTick;
 
         /// <summary>
         /// Overridden <see cref="IDisposable"/> implementation.

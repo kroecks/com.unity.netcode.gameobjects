@@ -2,6 +2,8 @@
 using System.Collections.Generic;
 using Unity.Collections;
 using Unity.Jobs;
+using Unity.Netcode.Logging;
+using Unity.Netcode.Runtime;
 using UnityEngine;
 
 namespace Unity.Netcode.Components
@@ -19,7 +21,7 @@ namespace Unity.Netcode.Components
         /// </summary>
         public bool ProvideNonRigidBodyContactEvents;
         /// <summary>
-        /// When set to true, the <see cref="RigidbodyContactEventManager"/> will prioritize invoking <see cref="IContactEventHandler.ContactEvent(ulong, Vector3, Rigidbody, Vector3, bool, Vector3)"/> <br /></br>
+        /// When set to true, the <see cref="RigidbodyContactEventManager"/> will prioritize invoking <see cref="IContactEventHandler.ContactEvent(ulong, Vector3, Rigidbody, Vector3, bool, Vector3)"/> <br />
         /// if it is the 2nd colliding body in the contact pair being processed. With distributed authority, setting this value to true when a <see cref="NetworkObject"/> is owned by the local client <br />
         /// will assure <see cref="IContactEventHandler.ContactEvent(ulong, Vector3, Rigidbody, Vector3, bool, Vector3)"/> is only invoked on the authoritative side.
         /// </summary>
@@ -37,7 +39,7 @@ namespace Unity.Netcode.Components
         /// <summary>
         /// Should return a <see cref="Rigidbody"/>.
         /// </summary>
-        Rigidbody GetRigidbody();
+        public Rigidbody GetRigidbody();
 
         /// <summary>
         /// Invoked by the <see cref="RigidbodyContactEventManager"/> instance.
@@ -48,7 +50,7 @@ namespace Unity.Netcode.Components
         /// <param name="contactPoint">The world space location of the contact event.</param>
         /// <param name="hasCollisionStay">Will be set if this is a collision stay contact event (i.e. it is not the first contact event and continually has contact)</param>
         /// <param name="averagedCollisionStayNormal">The average normal of the collision stay contact over time.</param>
-        void ContactEvent(ulong eventId, Vector3 averagedCollisionNormal, Rigidbody collidingBody, Vector3 contactPoint, bool hasCollisionStay = false, Vector3 averagedCollisionStayNormal = default);
+        public void ContactEvent(ulong eventId, Vector3 averagedCollisionNormal, Rigidbody collidingBody, Vector3 contactPoint, bool hasCollisionStay = false, Vector3 averagedCollisionStayNormal = default);
     }
 
     /// <summary>
@@ -61,7 +63,7 @@ namespace Unity.Netcode.Components
         /// Invoked by <see cref="RigidbodyContactEventManager"/> for each set of contact events it is processing (prior to processing).
         /// </summary>
         /// <returns><see cref="ContactEventHandlerInfo"/></returns>
-        ContactEventHandlerInfo GetContactEventHandlerInfo();
+        public ContactEventHandlerInfo GetContactEventHandlerInfo();
     }
 
     /// <summary>
@@ -71,6 +73,7 @@ namespace Unity.Netcode.Components
     /// <see cref="ContactEventHandlerInfo"/><br />
     /// </summary>
     [AddComponentMenu("Netcode/Rigidbody Contact Event Manager")]
+    [HelpURL(HelpUrls.RigidbodyContactEventManager)]
     public class RigidbodyContactEventManager : MonoBehaviour
     {
         public static RigidbodyContactEventManager Instance { get; private set; }
@@ -78,8 +81,13 @@ namespace Unity.Netcode.Components
         private struct JobResultStruct
         {
             public bool HasCollisionStay;
+#if UNITY_6000_2_OR_NEWER
+            public EntityId ThisInstanceID;
+            public EntityId OtherInstanceID;
+#else
             public int ThisInstanceID;
             public int OtherInstanceID;
+#endif
             public Vector3 AverageNormal;
             public Vector3 AverageCollisionStayNormal;
             public Vector3 ContactPoint;
@@ -88,19 +96,26 @@ namespace Unity.Netcode.Components
         private NativeArray<JobResultStruct> m_ResultsArray;
         private int m_Count = 0;
         private JobHandle m_JobHandle;
-
+#if UNITY_6000_2_OR_NEWER
+        private readonly Dictionary<EntityId, Rigidbody> m_RigidbodyMapping = new Dictionary<EntityId, Rigidbody>();
+        private readonly Dictionary<EntityId, IContactEventHandler> m_HandlerMapping = new Dictionary<EntityId, IContactEventHandler>();
+        private readonly Dictionary<EntityId, ContactEventHandlerInfo> m_HandlerInfo = new Dictionary<EntityId, ContactEventHandlerInfo>();
+#else
         private readonly Dictionary<int, Rigidbody> m_RigidbodyMapping = new Dictionary<int, Rigidbody>();
         private readonly Dictionary<int, IContactEventHandler> m_HandlerMapping = new Dictionary<int, IContactEventHandler>();
         private readonly Dictionary<int, ContactEventHandlerInfo> m_HandlerInfo = new Dictionary<int, ContactEventHandlerInfo>();
+#endif
 
+        private ContextualLogger m_Log;
         private void OnEnable()
         {
+            m_Log = new ContextualLogger(this);
             m_ResultsArray = new NativeArray<JobResultStruct>(16, Allocator.Persistent);
             Physics.ContactEvent += Physics_ContactEvent;
-            if (Instance != null)
+            if (Instance != null && Instance != this)
             {
-                NetworkLog.LogError($"[Invalid][Multiple Instances] Found more than one instance of {nameof(RigidbodyContactEventManager)}: {name} and {Instance.name}");
-                NetworkLog.LogError($"[Disable][Additional Instance] Disabling {name} instance!");
+                m_Log.Error(new Context(LogLevel.Error, $"Found more than one instance of {nameof(RigidbodyContactEventManager)}").AddTag("Invalid").AddTag("Multiple Instances").AddInfo("Instance 1", Instance.name).AddInfo("Instance 2", name));
+                m_Log.Error(new Context(LogLevel.Error, $"Disabling instance: ").AddTag("Disable").AddTag("Additional Instance").AddInfo("Instance", name));
                 gameObject.SetActive(false);
                 return;
             }
@@ -123,7 +138,11 @@ namespace Unity.Netcode.Components
             {
                 return;
             }
+#if UNITY_6000_2_OR_NEWER
+            var instanceId = rigidbody.GetEntityId();
+#else
             var instanceId = rigidbody.GetInstanceID();
+#endif
             if (register)
             {
                 if (!m_RigidbodyMapping.ContainsKey(instanceId))
@@ -374,8 +393,13 @@ namespace Unity.Netcode.Components
 
                 var result = new JobResultStruct()
                 {
+#if UNITY_6000_3_0A6_OR_HIGHER
+                    ThisInstanceID = PairedHeaders[index].bodyEntityId,
+                    OtherInstanceID = PairedHeaders[index].otherBodyEntityId,
+#else
                     ThisInstanceID = PairedHeaders[index].bodyInstanceID,
                     OtherInstanceID = PairedHeaders[index].otherBodyInstanceID,
+#endif
                     AverageNormal = averageNormal,
                     HasCollisionStay = collisionStaycount != 0,
                     AverageCollisionStayNormal = averageCollisionStay,

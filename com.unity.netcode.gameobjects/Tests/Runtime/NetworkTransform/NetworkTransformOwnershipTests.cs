@@ -1,4 +1,4 @@
-#if COM_UNITY_MODULES_PHYSICS
+#if COM_UNITY_MODULES_PHYSICS || COM_UNITY_MODULES_PHYSICS2D
 using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
@@ -53,8 +53,7 @@ namespace Unity.Netcode.RuntimeTests
             rigidBody.detectCollisions = false;
             rigidBody.position = Vector3.zero;
             rigidBody.rotation = Quaternion.identity;
-            rigidBody.transform.position = Vector3.zero;
-            rigidBody.transform.rotation = Quaternion.identity;
+            rigidBody.transform.SetPositionAndRotation(Vector3.zero, Quaternion.identity);
             // NOTE: We don't use a sphere collider for this integration test because by the time we can
             // assure they don't collide and skew the results the NetworkObjects are already synchronized
             // with skewed results
@@ -77,8 +76,7 @@ namespace Unity.Netcode.RuntimeTests
             rigidBody.detectCollisions = false;
             rigidBody.position = Vector3.zero;
             rigidBody.rotation = Quaternion.identity;
-            rigidBody.transform.position = Vector3.zero;
-            rigidBody.transform.rotation = Quaternion.identity;
+            rigidBody.transform.SetPositionAndRotation(Vector3.zero, Quaternion.identity);
             // NOTE: We don't use a sphere collider for this integration test because by the time we can
             // assure they don't collide and skew the results the NetworkObjects are already synchronized
             // with skewed results
@@ -119,8 +117,10 @@ namespace Unity.Netcode.RuntimeTests
         [UnityTest]
         public IEnumerator LateJoinedNonOwnerClientCannotChangeTransform()
         {
+            var authority = GetAuthorityNetworkManager();
+
             // Spawn the m_ClientNetworkTransformPrefab with the host starting as the owner
-            var hostInstance = SpawnObject(m_ClientNetworkTransformPrefab, m_ServerNetworkManager);
+            var hostInstance = SpawnObject(m_ClientNetworkTransformPrefab, authority);
 
             // Wait for the client to spawn it
             yield return WaitForConditionOrTimeOut(() => VerifyObjectIsSpawnedOnClient.GetClientsThatSpawnedThisPrefab().Contains(m_ClientNetworkManagers[0].LocalClientId));
@@ -185,7 +185,9 @@ namespace Unity.Netcode.RuntimeTests
 
         private bool ClientAndServerSpawnedInstance()
         {
-            return VerifyObjectIsSpawnedOnClient.NetworkManagerRelativeSpawnedObjects.ContainsKey(m_ServerNetworkManager.LocalClientId) && VerifyObjectIsSpawnedOnClient.NetworkManagerRelativeSpawnedObjects.ContainsKey(m_ClientNetworkManagers[0].LocalClientId);
+            var authorityId = GetAuthorityNetworkManager().LocalClientId;
+            var nonAuthorityId = GetNonAuthorityNetworkManager().LocalClientId;
+            return VerifyObjectIsSpawnedOnClient.NetworkManagerRelativeSpawnedObjects.ContainsKey(authorityId) && VerifyObjectIsSpawnedOnClient.NetworkManagerRelativeSpawnedObjects.ContainsKey(nonAuthorityId);
         }
 
         private bool m_UseAdjustedVariance;
@@ -210,9 +212,12 @@ namespace Unity.Netcode.RuntimeTests
         [UnityTest]
         public IEnumerator OwnerAuthoritativeTest([Values] StartingOwnership startingOwnership)
         {
+            var authority = GetAuthorityNetworkManager();
+            var nonAuthority = GetNonAuthorityNetworkManager();
+
             // Get the current ownership layout
-            var networkManagerOwner = startingOwnership == StartingOwnership.HostStartsAsOwner ? m_ServerNetworkManager : m_ClientNetworkManagers[0];
-            var networkManagerNonOwner = startingOwnership == StartingOwnership.HostStartsAsOwner ? m_ClientNetworkManagers[0] : m_ServerNetworkManager;
+            var networkManagerOwner = startingOwnership == StartingOwnership.HostStartsAsOwner ? authority : nonAuthority;
+            var networkManagerNonOwner = startingOwnership == StartingOwnership.HostStartsAsOwner ? nonAuthority : authority;
 
             // Spawn the m_ClientNetworkTransformPrefab and wait for the client-side to spawn the object
             var serverSideInstance = SpawnObject(m_ClientNetworkTransformPrefab, networkManagerOwner);
@@ -295,8 +300,7 @@ namespace Unity.Netcode.RuntimeTests
             }
             else
             {
-                ownerInstance.transform.position = valueSetByOwner;
-                ownerInstance.transform.rotation = rotation;
+                ownerInstance.transform.SetPositionAndRotation(valueSetByOwner, rotation);
                 ownerInstance.transform.localScale = valueSetByOwner;
             }
 
@@ -342,8 +346,8 @@ namespace Unity.Netcode.RuntimeTests
 
             LogNonOwnerRigidBody(4);
             // Re-assign the ownership references and wait for the non-owner instance to be notified of ownership change
-            networkManagerOwner = startingOwnership == StartingOwnership.HostStartsAsOwner ? m_ClientNetworkManagers[0] : m_ServerNetworkManager;
-            networkManagerNonOwner = startingOwnership == StartingOwnership.HostStartsAsOwner ? m_ServerNetworkManager : m_ClientNetworkManagers[0];
+            networkManagerOwner = startingOwnership == StartingOwnership.HostStartsAsOwner ? nonAuthority : authority;
+            networkManagerNonOwner = startingOwnership == StartingOwnership.HostStartsAsOwner ? authority : nonAuthority;
             ownerInstance = VerifyObjectIsSpawnedOnClient.GetClientInstance(networkManagerOwner.LocalClientId);
             Assert.NotNull(ownerInstance);
             yield return WaitForConditionOrTimeOut(() => VerifyObjectIsSpawnedOnClient.GetClientInstance(networkManagerNonOwner.LocalClientId) != null);
@@ -385,8 +389,7 @@ namespace Unity.Netcode.RuntimeTests
             else
             {
                 m_UseAdjustedVariance = false;
-                ownerInstance.transform.position = valueSetByOwner;
-                ownerInstance.transform.rotation = rotation;
+                ownerInstance.transform.SetPositionAndRotation(valueSetByOwner, rotation);
             }
 
             LogOwnerRigidBody(3);
@@ -422,16 +425,19 @@ namespace Unity.Netcode.RuntimeTests
         [UnityTest]
         public IEnumerator ServerAuthoritativeTest()
         {
-            // Spawn the m_NetworkTransformPrefab and wait for the client-side to spawn the object
-            var serverSideInstance = SpawnObject(m_NetworkTransformPrefab, m_ServerNetworkManager);
-            yield return WaitForConditionOrTimeOut(() => VerifyObjectIsSpawnedOnClient.GetClientsThatSpawnedThisPrefab().Contains(m_ClientNetworkManagers[0].LocalClientId));
+            var authority = GetAuthorityNetworkManager();
+            var nonAuthority = GetNonAuthorityNetworkManager();
 
-            var ownerInstance = VerifyObjectIsSpawnedOnClient.GetClientInstance(m_ServerNetworkManager.LocalClientId);
-            var nonOwnerInstance = VerifyObjectIsSpawnedOnClient.GetClientInstance(m_ClientNetworkManagers[0].LocalClientId);
+            // Spawn the m_NetworkTransformPrefab and wait for the client-side to spawn the object
+            var serverSideInstance = SpawnObject(m_NetworkTransformPrefab, authority);
+            yield return WaitForConditionOrTimeOut(() => VerifyObjectIsSpawnedOnClient.GetClientsThatSpawnedThisPrefab().Contains(nonAuthority.LocalClientId));
+
+            var ownerInstance = VerifyObjectIsSpawnedOnClient.GetClientInstance(authority.LocalClientId);
+            var nonOwnerInstance = VerifyObjectIsSpawnedOnClient.GetClientInstance(nonAuthority.LocalClientId);
 
             // Make sure the owner is not kinematic and the non-owner(s) are kinematic
-            Assert.False(ownerInstance.GetComponent<Rigidbody>().isKinematic, $"{m_ServerNetworkManager.name}'s object instance {ownerInstance.name} is kinematic when it should not be!");
-            Assert.True(nonOwnerInstance.GetComponent<Rigidbody>().isKinematic, $"{m_ClientNetworkManagers[0].name}'s object instance {nonOwnerInstance.name} is not kinematic when it should be!");
+            Assert.False(ownerInstance.GetComponent<Rigidbody>().isKinematic, $"{authority.name}'s object instance {ownerInstance.name} is kinematic when it should not be!");
+            Assert.True(nonOwnerInstance.GetComponent<Rigidbody>().isKinematic, $"{nonAuthority.name}'s object instance {nonOwnerInstance.name} is not kinematic when it should be!");
 
             // Server changes transform values
             var valueSetByOwner = Vector3.one * 2;
@@ -450,7 +456,7 @@ namespace Unity.Netcode.RuntimeTests
             }
             var transformToTest = nonOwnerInstance.transform;
             yield return WaitForConditionOrTimeOut(() => transformToTest.position == valueSetByOwner && transformToTest.localScale == valueSetByOwner && transformToTest.rotation == rotation);
-            Assert.False(s_GlobalTimeoutHelper.TimedOut, $"Timed out waiting for {m_ClientNetworkManagers[0].name}'s object instance {nonOwnerInstance.name} to change its transform!\n" +
+            Assert.False(s_GlobalTimeoutHelper.TimedOut, $"Timed out waiting for {nonAuthority.name}'s object instance {nonOwnerInstance.name} to change its transform!\n" +
                 $"Expected Position: {valueSetByOwner} | Current Position: {transformToTest.position}\n" +
                 $"Expected Rotation: {valueSetByOwner} | Current Rotation: {transformToTest.rotation.eulerAngles}\n" +
                 $"Expected Scale: {valueSetByOwner} | Current Scale: {transformToTest.localScale}");
@@ -463,7 +469,7 @@ namespace Unity.Netcode.RuntimeTests
             {
                 yield return new WaitForFixedUpdate();
             }
-            Assert.True(nonOwnerInstance.transform.position == valueSetByOwner, $"{m_ClientNetworkManagers[0].name}'s object instance {nonOwnerInstance.name} was allowed to change its position! Expected: {Vector3.one} Is Currently:{nonOwnerInstance.transform.position}");
+            Assert.True(nonOwnerInstance.transform.position == valueSetByOwner, $"{nonAuthority.name}'s object instance {nonOwnerInstance.name} was allowed to change its position! Expected: {Vector3.one} Is Currently:{nonOwnerInstance.transform.position}");
         }
 
         protected override IEnumerator OnTearDown()
@@ -553,7 +559,7 @@ namespace Unity.Netcode.RuntimeTests
             public static void EnableLogState(bool enable)
             {
                 s_LogStateEnabled = enable;
-                TrackByStateId = enable;
+                TrackStateUpdateId = enable;
             }
 
             private static bool s_LogStateEnabled;
@@ -619,7 +625,6 @@ namespace Unity.Netcode.RuntimeTests
 
         private StringBuilder m_ErrorLog = new StringBuilder();
 
-        private List<NetworkManager> m_NetworkManagers = new List<NetworkManager>();
         private List<GameObject> m_SpawnedObjects = new List<GameObject>();
 
         public NestedNetworkTransformTests(HostOrServer hostOrServer, NetworkTransform.AuthorityModes authorityMode) : base(hostOrServer)
@@ -651,6 +656,7 @@ namespace Unity.Netcode.RuntimeTests
         private void RandomizeObjectTransformPositions(GameObject gameObject)
         {
             var networkObject = gameObject.GetComponent<NetworkObject>();
+            networkObject.InitializeChildNetworkBehaviours();
             Assert.True(networkObject.ChildNetworkBehaviours.Count > 0);
 
             foreach (var networkTransform in networkObject.NetworkTransforms)
@@ -702,14 +708,9 @@ namespace Unity.Netcode.RuntimeTests
 
             if (m_DistributedAuthority)
             {
-                if (!UseCMBService())
+                foreach (var manager in m_NetworkManagers)
                 {
-                    m_ServerNetworkManager.OnFetchLocalPlayerPrefabToSpawn = FetchLocalPlayerPrefabToSpawn;
-                }
-
-                foreach (var client in m_ClientNetworkManagers)
-                {
-                    client.OnFetchLocalPlayerPrefabToSpawn = FetchLocalPlayerPrefabToSpawn;
+                    manager.OnFetchLocalPlayerPrefabToSpawn = FetchLocalPlayerPrefabToSpawn;
                 }
             }
             else
@@ -844,12 +845,6 @@ namespace Unity.Netcode.RuntimeTests
         [UnityTest]
         public IEnumerator NestedNetworkTransformSpawnPositionTest()
         {
-            if (!m_DistributedAuthority || (m_DistributedAuthority && !UseCMBService()))
-            {
-                m_NetworkManagers.Add(m_ServerNetworkManager);
-            }
-            m_NetworkManagers.AddRange(m_ClientNetworkManagers);
-
             yield return WaitForConditionOrTimeOut(AllClientInstancesSynchronized);
             AssertOnTimeout($"Failed to synchronize all client instances!\n{m_ErrorLog}");
 
@@ -867,14 +862,12 @@ namespace Unity.Netcode.RuntimeTests
             yield return WaitForConditionOrTimeOut(AllSpawnedObjectsSynchronized);
             AssertOnTimeout($"Failed to synchronize all spawned NetworkObject instances!\n{m_ErrorLog}");
             m_SpawnedObjects.Clear();
-            m_NetworkManagers.Clear();
         }
 
         protected override IEnumerator OnTearDown()
         {
             // In case there was a failure, go ahead and clear these lists out for any pending TextFixture passes
             m_SpawnedObjects.Clear();
-            m_NetworkManagers.Clear();
             return base.OnTearDown();
         }
     }

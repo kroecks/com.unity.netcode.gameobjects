@@ -31,7 +31,7 @@ namespace Unity.Netcode
         public void Handle(ref NetworkContext context)
         {
             var networkManager = (NetworkManager)context.SystemOwner;
-            if (ShouldSynchronize && networkManager.NetworkConfig.EnableSceneManagement && networkManager.DistributedAuthorityMode && networkManager.LocalClient.IsSessionOwner)
+            if (ShouldSynchronize && networkManager.NetworkConfig.EnableSceneManagement && networkManager.DistributedAuthorityMode && !networkManager.CMBServiceConnection && networkManager.LocalClient.IsSessionOwner)
             {
                 networkManager.SceneManager.SynchronizeNetworkObjects(ClientId);
             }
@@ -49,7 +49,7 @@ namespace Unity.Netcode
                 networkManager.ConnectionManager.InvokeOnPeerConnectedCallback(ClientId);
             }
 
-            // DANGO-TODO: Remove the session owner object distribution check once the service handles object distribution
+            // This handles object redistribution when scene management is disabled
             if (networkManager.DistributedAuthorityMode && networkManager.CMBServiceConnection && !networkManager.NetworkConfig.EnableSceneManagement)
             {
                 // Don't redistribute for the local instance

@@ -11,6 +11,8 @@ namespace Unity.Netcode
         /// The <see cref="NetworkManager"/> instance which can be used to handle sending and receiving the specific target(s)
         /// </summary>
         protected NetworkManager m_NetworkManager;
+
+        internal NetworkConnectionManager ConnectionManager;
         private bool m_Locked;
 
         internal void Lock()
@@ -26,6 +28,7 @@ namespace Unity.Netcode
         internal BaseRpcTarget(NetworkManager manager)
         {
             m_NetworkManager = manager;
+            ConnectionManager = m_NetworkManager.ConnectionManager;
         }
 
         /// <summary>
@@ -49,21 +52,10 @@ namespace Unity.Netcode
 
         private protected void SendMessageToClient(NetworkBehaviour behaviour, ulong clientId, ref RpcMessage message, NetworkDelivery delivery)
         {
-#if DEVELOPMENT_BUILD || UNITY_EDITOR || UNITY_MP_TOOLS_NET_STATS_MONITOR_ENABLED_IN_RELEASE
-            var size =
-#endif
-                behaviour.NetworkManager.MessageManager.SendMessage(ref message, delivery, clientId);
-
-#if DEVELOPMENT_BUILD || UNITY_EDITOR || UNITY_MP_TOOLS_NET_STATS_MONITOR_ENABLED_IN_RELEASE
-            if (NetworkBehaviour.__rpc_name_table[behaviour.GetType()].TryGetValue(message.Metadata.NetworkRpcMethodId, out var rpcMethodName))
-            {
-                behaviour.NetworkManager.NetworkMetrics.TrackRpcSent(
-                    clientId,
-                    behaviour.NetworkObject,
-                    rpcMethodName,
-                    behaviour.__getTypeName(),
-                    size);
-            }
+            var size = behaviour.NetworkManager.MessageManager.SendMessage(ref message, delivery, clientId);
+#if MULTIPLAYER_TOOLS && (DEBUG || UNITY_MP_TOOLS_NET_STATS_MONITOR_ENABLED_IN_RELEASE)
+            // Send to a specific client
+            behaviour.TrackRpcMetricsSend(clientId, ref message, size);
 #endif
         }
     }

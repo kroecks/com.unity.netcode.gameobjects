@@ -8,7 +8,6 @@ using Unity.Collections;
 using Unity.Netcode.TestHelpers.Runtime;
 using UnityEngine;
 using UnityEngine.TestTools;
-using Random = UnityEngine.Random;
 
 namespace Unity.Netcode.RuntimeTests
 {
@@ -112,21 +111,8 @@ namespace Unity.Netcode.RuntimeTests
         }
         public readonly NetworkVariable<int> TheScalar = new NetworkVariable<int>();
         public readonly NetworkVariable<SomeEnum> TheEnum = new NetworkVariable<SomeEnum>();
-        public readonly NetworkList<int> TheList = new NetworkList<int>();
-        public readonly NetworkList<StructUsedOnlyInNetworkList> TheStructList = new NetworkList<StructUsedOnlyInNetworkList>();
-        public readonly NetworkList<FixedString128Bytes> TheLargeList = new NetworkList<FixedString128Bytes>();
 
         public readonly NetworkVariable<FixedString32Bytes> FixedString32 = new NetworkVariable<FixedString32Bytes>();
-
-        private void ListChanged(NetworkListEvent<int> e)
-        {
-            ListDelegateTriggered = true;
-        }
-
-        public void Awake()
-        {
-            TheList.OnListChanged += ListChanged;
-        }
 
         public readonly NetworkVariable<TestStruct> TheStruct = new NetworkVariable<TestStruct>();
         public readonly NetworkVariable<TestClass> TheClass = new NetworkVariable<TestClass>();
@@ -134,7 +120,6 @@ namespace Unity.Netcode.RuntimeTests
         public NetworkVariable<UnmanagedTemplateNetworkSerializableType<TestStruct>> TheTemplateStruct = new NetworkVariable<UnmanagedTemplateNetworkSerializableType<TestStruct>>();
         public NetworkVariable<ManagedTemplateNetworkSerializableType<TestClass>> TheTemplateClass = new NetworkVariable<ManagedTemplateNetworkSerializableType<TestClass>>();
 
-        public bool ListDelegateTriggered;
 
         public override void OnNetworkSpawn()
         {
@@ -143,177 +128,6 @@ namespace Unity.Netcode.RuntimeTests
                 NetworkVariableTests.ClientNetworkVariableTestSpawned(this);
             }
             base.OnNetworkSpawn();
-        }
-    }
-
-    /// <summary>
-    /// Handles the more generic conditional logic for NetworkList tests
-    /// which can be used with the <see cref="NetcodeIntegrationTest.WaitForConditionOrTimeOut"/>
-    /// that accepts anything derived from the <see cref="ConditionalPredicateBase"/> class
-    /// as a parameter.
-    /// </summary>
-    internal class NetworkListTestPredicate : ConditionalPredicateBase
-    {
-        private const int k_MaxRandomValue = 1000;
-
-        private Dictionary<NetworkListTestStates, Func<bool>> m_StateFunctions;
-
-        // Player1 component on the Server
-        private NetworkVariableTest m_Player1OnServer;
-
-        // Player1 component on client1
-        private NetworkVariableTest m_Player1OnClient1;
-
-        private string m_TestStageFailedMessage;
-
-        public enum NetworkListTestStates
-        {
-            Add,
-            ContainsLarge,
-            Contains,
-            VerifyData,
-            IndexOf,
-        }
-
-        private NetworkListTestStates m_NetworkListTestState;
-
-        public void SetNetworkListTestState(NetworkListTestStates networkListTestState)
-        {
-            m_NetworkListTestState = networkListTestState;
-        }
-
-        /// <summary>
-        /// Determines if the condition has been reached for the current NetworkListTestState
-        /// </summary>
-        protected override bool OnHasConditionBeenReached()
-        {
-            var isStateRegistered = m_StateFunctions.ContainsKey(m_NetworkListTestState);
-            Assert.IsTrue(isStateRegistered);
-            return m_StateFunctions[m_NetworkListTestState].Invoke();
-        }
-
-        /// <summary>
-        /// Provides all information about the players for both sides for simplicity and informative sake.
-        /// </summary>
-        /// <returns></returns>
-        private string ConditionFailedInfo()
-        {
-            return $"{m_NetworkListTestState} condition test failed:\n Server List Count: {m_Player1OnServer.TheList.Count} vs  Client List Count: {m_Player1OnClient1.TheList.Count}\n" +
-                $"Server List Count: {m_Player1OnServer.TheLargeList.Count} vs  Client List Count: {m_Player1OnClient1.TheLargeList.Count}\n" +
-                $"Server Delegate Triggered: {m_Player1OnServer.ListDelegateTriggered} | Client Delegate Triggered: {m_Player1OnClient1.ListDelegateTriggered}\n";
-        }
-
-        /// <summary>
-        /// When finished, check if a time out occurred and if so assert and provide meaningful information to troubleshoot why
-        /// </summary>
-        protected override void OnFinished()
-        {
-            Assert.IsFalse(TimedOut, $"{nameof(NetworkListTestPredicate)} timed out waiting for the {m_NetworkListTestState} condition to be reached! \n" + ConditionFailedInfo());
-        }
-
-        // Uses the ArrayOperator and validates that on both sides the count and values are the same
-        private bool OnVerifyData()
-        {
-            // Wait until both sides have the same number of elements
-            if (m_Player1OnServer.TheList.Count != m_Player1OnClient1.TheList.Count)
-            {
-                return false;
-            }
-
-            // Check the client values against the server values to make sure they match
-            for (int i = 0; i < m_Player1OnServer.TheList.Count; i++)
-            {
-                if (m_Player1OnServer.TheList[i] != m_Player1OnClient1.TheList[i])
-                {
-                    return false;
-                }
-            }
-            return true;
-        }
-
-        /// <summary>
-        /// Verifies the data count, values, and that the ListDelegate on both sides was triggered
-        /// </summary>
-        private bool OnAdd()
-        {
-            bool wasTriggerred = m_Player1OnServer.ListDelegateTriggered && m_Player1OnClient1.ListDelegateTriggered;
-            return wasTriggerred && OnVerifyData();
-        }
-
-        /// <summary>
-        /// The current version of this test only verified the count of the large list, so that is what this does
-        /// </summary>
-        private bool OnContainsLarge()
-        {
-            return m_Player1OnServer.TheLargeList.Count == m_Player1OnClient1.TheLargeList.Count;
-        }
-
-        /// <summary>
-        /// Tests NetworkList.Contains which also verifies all values are the same on both sides
-        /// </summary>
-        private bool OnContains()
-        {
-            // Wait until both sides have the same number of elements
-            if (m_Player1OnServer.TheList.Count != m_Player1OnClient1.TheList.Count)
-            {
-                return false;
-            }
-
-            // Parse through all server values and use the NetworkList.Contains method to check if the value is in the list on the client side
-            foreach (var serverValue in m_Player1OnServer.TheList)
-            {
-                if (!m_Player1OnClient1.TheList.Contains(serverValue))
-                {
-                    return false;
-                }
-            }
-            return true;
-        }
-
-        /// <summary>
-        /// Tests NetworkList.IndexOf and verifies that all values are aligned on both sides
-        /// </summary>
-        private bool OnIndexOf()
-        {
-            foreach (var serverSideValue in m_Player1OnServer.TheList)
-            {
-                var indexToTest = m_Player1OnServer.TheList.IndexOf(serverSideValue);
-                if (indexToTest != m_Player1OnServer.TheList.IndexOf(serverSideValue))
-                {
-                    return false;
-                }
-            }
-            return true;
-        }
-
-        public NetworkListTestPredicate(NetworkVariableTest player1OnServer, NetworkVariableTest player1OnClient1, NetworkListTestStates networkListTestState, int elementCount)
-        {
-            m_NetworkListTestState = networkListTestState;
-            m_Player1OnServer = player1OnServer;
-            m_Player1OnClient1 = player1OnClient1;
-            m_StateFunctions = new Dictionary<NetworkListTestStates, Func<bool>>
-            {
-                { NetworkListTestStates.Add, OnAdd },
-                { NetworkListTestStates.ContainsLarge, OnContainsLarge },
-                { NetworkListTestStates.Contains, OnContains },
-                { NetworkListTestStates.VerifyData, OnVerifyData },
-                { NetworkListTestStates.IndexOf, OnIndexOf }
-            };
-
-            if (networkListTestState == NetworkListTestStates.ContainsLarge)
-            {
-                for (var i = 0; i < elementCount; ++i)
-                {
-                    m_Player1OnServer.TheLargeList.Add(new FixedString128Bytes());
-                }
-            }
-            else
-            {
-                for (int i = 0; i < elementCount; i++)
-                {
-                    m_Player1OnServer.TheList.Add(Random.Range(0, k_MaxRandomValue));
-                }
-            }
         }
     }
 
@@ -396,10 +210,14 @@ namespace Unity.Netcode.RuntimeTests
         }
     }
 
-#if !MULTIPLAYER_TOOLS
-    [TestFixture(true)]
-#endif
-    [TestFixture(false)]
+    internal enum Serialization
+    {
+        EnsureLengthSafety,
+        Default,
+    }
+
+    [TestFixture(Serialization.EnsureLengthSafety)]
+    [TestFixture(Serialization.Default)]
     internal class NetworkVariableTests : NetcodeIntegrationTest
     {
         private const string k_StringTestValue = "abcdefghijklmnopqrstuvwxyz";
@@ -409,8 +227,6 @@ namespace Unity.Netcode.RuntimeTests
         private const uint k_TestUInt = 0x12345678;
 
         private const int k_TestVal1 = 111;
-        private const int k_TestVal2 = 222;
-        private const int k_TestVal3 = 333;
 
         protected override bool m_EnableTimeTravel => true;
         protected override bool m_SetupIsACoroutine => false;
@@ -428,18 +244,24 @@ namespace Unity.Netcode.RuntimeTests
         // Player1 component on client1
         private NetworkVariableTest m_Player1OnClient1;
 
-        private NetworkListTestPredicate m_NetworkListPredicateHandler;
-
         private readonly bool m_EnsureLengthSafety;
 
-        public NetworkVariableTests(bool ensureLengthSafety)
+        public NetworkVariableTests(Serialization serialization)
         {
-            m_EnsureLengthSafety = ensureLengthSafety;
+            m_EnsureLengthSafety = serialization == Serialization.EnsureLengthSafety;
         }
+
+        private bool m_CanStart = false;
 
         protected override bool CanStartServerAndClients()
         {
-            return false;
+            return m_CanStart;
+        }
+
+        protected override void OnInlineSetup()
+        {
+            m_CanStart = false;
+            base.OnInlineSetup();
         }
 
         protected override void OnOneTimeSetup()
@@ -467,15 +289,21 @@ namespace Unity.Netcode.RuntimeTests
             m_PlayerPrefab.AddComponent<ClassHavingNetworkBehaviour2>();
             m_PlayerPrefab.AddComponent<StructHavingNetworkBehaviour>();
 
+            m_UseHost = useHost == HostOrServer.DAHost || useHost == HostOrServer.Host;
+            m_NetworkTopologyType = useHost == HostOrServer.DAHost ? NetworkTopologyTypes.DistributedAuthority : NetworkTopologyTypes.ClientServer;
+
             m_ServerNetworkManager.NetworkConfig.EnsureNetworkVariableLengthSafety = m_EnsureLengthSafety;
             m_ServerNetworkManager.NetworkConfig.PlayerPrefab = m_PlayerPrefab;
+            SetDistributedAuthorityProperties(m_ServerNetworkManager);
             foreach (var client in m_ClientNetworkManagers)
             {
                 client.NetworkConfig.EnsureNetworkVariableLengthSafety = m_EnsureLengthSafety;
                 client.NetworkConfig.PlayerPrefab = m_PlayerPrefab;
+                SetDistributedAuthorityProperties(client);
             }
 
-            Assert.True(NetcodeIntegrationTestHelpers.Start(useHost == HostOrServer.Host, m_ServerNetworkManager, m_ClientNetworkManagers), "Failed to start server and client instances");
+            var useServer = useHost == HostOrServer.Server;
+            Assert.True(NetcodeIntegrationTestHelpers.Start(!useServer, m_ServerNetworkManager, m_ClientNetworkManagers), "Failed to start server and client instances");
 
             RegisterSceneManagerHandler();
 
@@ -491,7 +319,7 @@ namespace Unity.Netcode.RuntimeTests
                 m_ServerNetworkManager, result);
 
             // Assign server-side client's player
-            m_Player1OnServer = result.Result.GetComponent<NetworkVariableTest>();
+            var serverVersionOfPlayer = result.Result.GetComponent<NetworkVariableTest>();
 
             // This is client1's view of itself
             NetcodeIntegrationTestHelpers.GetNetworkObjectByRepresentationWithTimeTravel(
@@ -499,20 +327,16 @@ namespace Unity.Netcode.RuntimeTests
                 m_ClientNetworkManagers[0], result);
 
             // Assign client-side local player
-            m_Player1OnClient1 = result.Result.GetComponent<NetworkVariableTest>();
+            var clientVersionOfPlayer = result.Result.GetComponent<NetworkVariableTest>();
 
-            m_Player1OnServer.TheList.Clear();
+            // In distributed authority mode, the client is the authority of itself, rather than the server.
+            var authority = m_DistributedAuthority ? clientVersionOfPlayer : serverVersionOfPlayer;
+            var nonAuthority = m_DistributedAuthority ? serverVersionOfPlayer : clientVersionOfPlayer;
 
-            if (m_Player1OnServer.TheList.Count > 0)
-            {
-                throw new Exception("at least one server network container not empty at start");
-            }
-            if (m_Player1OnClient1.TheList.Count > 0)
-            {
-                throw new Exception("at least one client network container not empty at start");
-            }
+            m_Player1OnServer = authority;
+            m_Player1OnClient1 = nonAuthority;
 
-            var instanceCount = useHost == HostOrServer.Host ? NumberOfClients * 3 : NumberOfClients * 2;
+            var instanceCount = useHost == HostOrServer.Server ? NumberOfClients * 2 : NumberOfClients * 3;
             // Wait for the client-side to notify it is finished initializing and spawning.
             success = WaitForConditionOrTimeOutWithTimeTravel(() => s_ClientNetworkVariableTestInstances.Count == instanceCount);
 
@@ -521,28 +345,39 @@ namespace Unity.Netcode.RuntimeTests
             TimeTravelToNextTick();
         }
 
-#if !MULTIPLAYER_TOOLS
         /// <summary>
         /// Runs generalized tests on all predefined NetworkVariable types
         /// </summary>
         [Test]
+#if ENABLE_CORECLR
+        [Explicit("NGO NetworkVariable serialization codegen not generated for some types on CoreCLR (falls back to FallbackSerializer), see https://jira.unity3d.com/browse/UUM-149592")]
+#endif
         public void AllNetworkVariableTypes([Values] HostOrServer useHost)
         {
-            // Create, instantiate, and host
-            // This would normally go in Setup, but since every other test but this one
-            //  uses NetworkManagerHelper, and it does its own NetworkManager setup / teardown,
-            //  for now we put this within this one test until we migrate it to MIH
-            Assert.IsTrue(NetworkManagerHelper.StartNetworkManager(out NetworkManager server, useHost == HostOrServer.Host ? NetworkManagerHelper.NetworkManagerOperatingMode.Host : NetworkManagerHelper.NetworkManagerOperatingMode.Server));
+            var prefabToSpawn = CreateNetworkObjectPrefab("NetVarTest");
+            prefabToSpawn.AddComponent<NetworkVariableTestComponent>();
 
-            Assert.IsTrue(server.IsHost == (useHost == HostOrServer.Host), $"{nameof(useHost)} does not match the server.IsHost value!");
+            m_CanStart = true;
+            StartServerAndClientsWithTimeTravel();
+            var authority = GetAuthorityNetworkManager();
 
-            Guid gameObjectId = NetworkManagerHelper.AddGameNetworkObject("NetworkVariableTestComponent");
+            // Shutdown the other clients
+            foreach (var networkManager in m_NetworkManagers)
+            {
+                if (networkManager == authority)
+                {
+                    continue;
+                }
+                StopOneClientWithTimeTravel(networkManager);
+            }
 
-            var networkVariableTestComponent = NetworkManagerHelper.AddComponentToObject<NetworkVariableTestComponent>(gameObjectId);
+            var instance = SpawnObject(prefabToSpawn, authority);
+            var networkVariableTestComponent = instance.GetComponent<NetworkVariableTestComponent>();
 
-            NetworkManagerHelper.SpawnNetworkObject(gameObjectId);
+            Assert.IsTrue(networkVariableTestComponent.IsSpawned, $"Failed to spawn {instance.name}!");
 
             // Start Testing
+            networkVariableTestComponent.InitializeTest();
             networkVariableTestComponent.EnableTesting = true;
 
             var success = WaitForConditionOrTimeOutWithTimeTravel(() => true == networkVariableTestComponent.IsTestComplete());
@@ -554,16 +389,14 @@ namespace Unity.Netcode.RuntimeTests
             Assert.IsTrue(networkVariableTestComponent.DidAllValuesChange());
             networkVariableTestComponent.AssertAllValuesAreCorrect();
 
-            // Disable this once we are done.
-            networkVariableTestComponent.gameObject.SetActive(false);
-
-            // This would normally go in Teardown, but since every other test but this one
-            //  uses NetworkManagerHelper, and it does its own NetworkManager setup / teardown,
-            //  for now we put this within this one test until we migrate it to MIH
-            NetworkManagerHelper.ShutdownNetworkManager();
+            // Stop the authority NetworkManager instance
+            StopOneClientWithTimeTravel(authority);
         }
 
         [Test]
+#if ENABLE_CORECLR
+        [Explicit("NGO multi-instance test sessions fail to start/connect or time out on CoreCLR, see https://jira.unity3d.com/browse/UUM-149591")]
+#endif
         public void ClientWritePermissionTest([Values] HostOrServer useHost)
         {
             InitializeServerAndClients(useHost);
@@ -578,6 +411,9 @@ namespace Unity.Netcode.RuntimeTests
         /// Runs tests that network variables sync on client whatever the local value of <see cref="Time.timeScale"/>.
         /// </summary>
         [Test]
+#if ENABLE_CORECLR
+        [Explicit("NGO multi-instance test sessions fail to start/connect or time out on CoreCLR, see https://jira.unity3d.com/browse/UUM-149591")]
+#endif
         public void NetworkVariableSync_WithDifferentTimeScale([Values] HostOrServer useHost, [Values(0.0f, 1.0f, 2.0f)] float timeScale)
         {
             Time.timeScale = timeScale;
@@ -592,6 +428,9 @@ namespace Unity.Netcode.RuntimeTests
         }
 
         [Test]
+#if ENABLE_CORECLR
+        [Explicit("NGO multi-instance test sessions fail to start/connect or time out on CoreCLR, see https://jira.unity3d.com/browse/UUM-149591")]
+#endif
         public void FixedString32Test([Values] HostOrServer useHost)
         {
             InitializeServerAndClients(useHost);
@@ -603,161 +442,9 @@ namespace Unity.Netcode.RuntimeTests
         }
 
         [Test]
-        public void NetworkListAdd([Values] HostOrServer useHost)
-        {
-            InitializeServerAndClients(useHost);
-            m_NetworkListPredicateHandler = new NetworkListTestPredicate(m_Player1OnServer, m_Player1OnClient1, NetworkListTestPredicate.NetworkListTestStates.Add, 10);
-            Assert.True(WaitForConditionOrTimeOutWithTimeTravel(m_NetworkListPredicateHandler));
-        }
-
-        [Test]
-        public void WhenListContainsManyLargeValues_OverflowExceptionIsNotThrown([Values] HostOrServer useHost)
-        {
-            InitializeServerAndClients(useHost);
-            m_NetworkListPredicateHandler = new NetworkListTestPredicate(m_Player1OnServer, m_Player1OnClient1, NetworkListTestPredicate.NetworkListTestStates.ContainsLarge, 20);
-            Assert.True(WaitForConditionOrTimeOutWithTimeTravel(m_NetworkListPredicateHandler));
-        }
-
-        [Test]
-        public void NetworkListContains([Values] HostOrServer useHost)
-        {
-            // Re-use the NetworkListAdd to initialize the server and client as well as make sure the list is populated
-            NetworkListAdd(useHost);
-
-            // Now test the NetworkList.Contains method
-            m_NetworkListPredicateHandler.SetNetworkListTestState(NetworkListTestPredicate.NetworkListTestStates.Contains);
-            Assert.True(WaitForConditionOrTimeOutWithTimeTravel(m_NetworkListPredicateHandler));
-        }
-
-
-        [Test]
-        public void NetworkListInsert([Values] HostOrServer useHost)
-        {
-            // Re-use the NetworkListAdd to initialize the server and client as well as make sure the list is populated
-            NetworkListAdd(useHost);
-
-            // Now randomly insert a random value entry
-            m_Player1OnServer.TheList.Insert(Random.Range(0, 9), Random.Range(1, 99));
-
-            // Verify the element count and values on the client matches the server
-            m_NetworkListPredicateHandler.SetNetworkListTestState(NetworkListTestPredicate.NetworkListTestStates.VerifyData);
-            Assert.True(WaitForConditionOrTimeOutWithTimeTravel(m_NetworkListPredicateHandler));
-        }
-
-        [Test]
-        public void NetworkListIndexOf([Values] HostOrServer useHost)
-        {
-            // Re-use the NetworkListAdd to initialize the server and client as well as make sure the list is populated
-            NetworkListAdd(useHost);
-
-            m_NetworkListPredicateHandler.SetNetworkListTestState(NetworkListTestPredicate.NetworkListTestStates.IndexOf);
-            Assert.True(WaitForConditionOrTimeOutWithTimeTravel(m_NetworkListPredicateHandler));
-        }
-
-        [Test]
-        public void NetworkListValueUpdate([Values] HostOrServer useHost)
-        {
-            var testSucceeded = false;
-            InitializeServerAndClients(useHost);
-            // Add 1 element value and verify it is the same on the client
-            m_NetworkListPredicateHandler = new NetworkListTestPredicate(m_Player1OnServer, m_Player1OnClient1, NetworkListTestPredicate.NetworkListTestStates.Add, 1);
-            Assert.True(WaitForConditionOrTimeOutWithTimeTravel(m_NetworkListPredicateHandler));
-
-            // Setup our original and
-            var previousValue = m_Player1OnServer.TheList[0];
-            var updatedValue = previousValue + 10;
-
-            // Callback that verifies the changed event occurred and that the original and new values are correct
-            void TestValueUpdatedCallback(NetworkListEvent<int> changedEvent)
-            {
-                testSucceeded = changedEvent.PreviousValue == previousValue &&
-                                changedEvent.Value == updatedValue;
-            }
-
-            // Subscribe to the OnListChanged event on the client side and
-            m_Player1OnClient1.TheList.OnListChanged += TestValueUpdatedCallback;
-            m_Player1OnServer.TheList[0] = updatedValue;
-
-            // Wait until we know the client side matches the server side before checking if the callback was a success
-            m_NetworkListPredicateHandler.SetNetworkListTestState(NetworkListTestPredicate.NetworkListTestStates.VerifyData);
-            WaitForConditionOrTimeOutWithTimeTravel(m_NetworkListPredicateHandler);
-
-            Assert.That(testSucceeded);
-            m_Player1OnClient1.TheList.OnListChanged -= TestValueUpdatedCallback;
-        }
-
-        private List<int> m_ExpectedValuesServer = new List<int>();
-        private List<int> m_ExpectedValuesClient = new List<int>();
-
-        public enum ListRemoveTypes
-        {
-            Remove,
-            RemoveAt
-        }
-
-
-        [Test]
-        public void NetworkListRemoveTests([Values] HostOrServer useHost, [Values] ListRemoveTypes listRemoveType)
-        {
-            m_ExpectedValuesServer.Clear();
-            m_ExpectedValuesClient.Clear();
-            // Re-use the NetworkListAdd to initialize the server and client as well as make sure the list is populated
-            NetworkListAdd(useHost);
-
-            // Randomly remove a few entries
-            m_Player1OnServer.TheList.OnListChanged += Server_OnListChanged;
-            m_Player1OnClient1.TheList.OnListChanged += Client_OnListChanged;
-
-            // Remove half of the elements
-            for (int i = 0; i < (int)(m_Player1OnServer.TheList.Count * 0.5f); i++)
-            {
-                var index = Random.Range(0, m_Player1OnServer.TheList.Count - 1);
-                var value = m_Player1OnServer.TheList[index];
-                m_ExpectedValuesServer.Add(value);
-                m_ExpectedValuesClient.Add(value);
-
-                if (listRemoveType == ListRemoveTypes.RemoveAt)
-                {
-                    m_Player1OnServer.TheList.RemoveAt(index);
-                }
-                else
-                {
-                    m_Player1OnServer.TheList.Remove(value);
-                }
-            }
-
-            // Verify the element count and values on the client matches the server
-            m_NetworkListPredicateHandler.SetNetworkListTestState(NetworkListTestPredicate.NetworkListTestStates.VerifyData);
-            Assert.True(WaitForConditionOrTimeOutWithTimeTravel(m_NetworkListPredicateHandler));
-
-            Assert.True(m_ExpectedValuesServer.Count == 0, $"Server was not notified of all elements removed and still has {m_ExpectedValuesServer.Count} elements left!");
-            Assert.True(m_ExpectedValuesClient.Count == 0, $"Client was not notified of all elements removed and still has {m_ExpectedValuesClient.Count} elements left!");
-        }
-
-        private void Server_OnListChanged(NetworkListEvent<int> changeEvent)
-        {
-            Assert.True(m_ExpectedValuesServer.Contains(changeEvent.Value));
-            m_ExpectedValuesServer.Remove(changeEvent.Value);
-        }
-
-        private void Client_OnListChanged(NetworkListEvent<int> changeEvent)
-        {
-            Assert.True(m_ExpectedValuesClient.Contains(changeEvent.Value));
-            m_ExpectedValuesClient.Remove(changeEvent.Value);
-        }
-
-        [Test]
-        public void NetworkListClear([Values] HostOrServer useHost)
-        {
-            // Re-use the NetworkListAdd to initialize the server and client as well as make sure the list is populated
-            NetworkListAdd(useHost);
-            m_Player1OnServer.TheList.Clear();
-            // Verify the element count and values on the client matches the server
-            m_NetworkListPredicateHandler.SetNetworkListTestState(NetworkListTestPredicate.NetworkListTestStates.VerifyData);
-            Assert.True(WaitForConditionOrTimeOutWithTimeTravel(m_NetworkListPredicateHandler));
-        }
-
-        [Test]
+#if ENABLE_CORECLR
+        [Explicit("NGO multi-instance test sessions fail to start/connect or time out on CoreCLR, see https://jira.unity3d.com/browse/UUM-149591")]
+#endif
         public void TestNetworkVariableClass([Values] HostOrServer useHost)
         {
             InitializeServerAndClients(useHost);
@@ -777,6 +464,9 @@ namespace Unity.Netcode.RuntimeTests
         }
 
         [Test]
+#if ENABLE_CORECLR
+        [Explicit("NGO multi-instance test sessions fail to start/connect or time out on CoreCLR, see https://jira.unity3d.com/browse/UUM-149591")]
+#endif
         public void TestNetworkVariableTemplateClass([Values] HostOrServer useHost)
         {
             InitializeServerAndClients(useHost);
@@ -795,26 +485,9 @@ namespace Unity.Netcode.RuntimeTests
         }
 
         [Test]
-        public void TestNetworkListStruct([Values] HostOrServer useHost)
-        {
-            InitializeServerAndClients(useHost);
-
-            bool VerifyList()
-            {
-                return m_Player1OnClient1.TheStructList.Count == m_Player1OnServer.TheStructList.Count &&
-                       m_Player1OnClient1.TheStructList[0].Value == m_Player1OnServer.TheStructList[0].Value &&
-                       m_Player1OnClient1.TheStructList[1].Value == m_Player1OnServer.TheStructList[1].Value;
-            }
-
-            m_Player1OnServer.TheStructList.Add(new StructUsedOnlyInNetworkList { Value = 1 });
-            m_Player1OnServer.TheStructList.Add(new StructUsedOnlyInNetworkList { Value = 2 });
-            m_Player1OnServer.TheStructList.SetDirty(true);
-
-            // Wait for the client-side to notify it is finished initializing and spawning.
-            Assert.True(WaitForConditionOrTimeOutWithTimeTravel(VerifyList));
-        }
-
-        [Test]
+#if ENABLE_CORECLR
+        [Explicit("NGO multi-instance test sessions fail to start/connect or time out on CoreCLR, see https://jira.unity3d.com/browse/UUM-149591")]
+#endif
         public void TestNetworkVariableStruct([Values] HostOrServer useHost)
         {
             InitializeServerAndClients(useHost);
@@ -833,6 +506,9 @@ namespace Unity.Netcode.RuntimeTests
         }
 
         [Test]
+#if ENABLE_CORECLR
+        [Explicit("NGO multi-instance test sessions fail to start/connect or time out on CoreCLR, see https://jira.unity3d.com/browse/UUM-149591")]
+#endif
         public void TestNetworkVariableTemplateStruct([Values] HostOrServer useHost)
         {
             InitializeServerAndClients(useHost);
@@ -851,6 +527,9 @@ namespace Unity.Netcode.RuntimeTests
         }
 
         [Test]
+#if ENABLE_CORECLR
+        [Explicit("NGO multi-instance test sessions fail to start/connect or time out on CoreCLR, see https://jira.unity3d.com/browse/UUM-149591")]
+#endif
         public void TestNetworkVariableTemplateBehaviourClass([Values] HostOrServer useHost)
         {
             InitializeServerAndClients(useHost);
@@ -873,6 +552,9 @@ namespace Unity.Netcode.RuntimeTests
         }
 
         [Test]
+#if ENABLE_CORECLR
+        [Explicit("NGO multi-instance test sessions fail to start/connect or time out on CoreCLR, see https://jira.unity3d.com/browse/UUM-149591")]
+#endif
         public void TestNetworkVariableTemplateBehaviourClassNotReferencedElsewhere([Values] HostOrServer useHost)
         {
             InitializeServerAndClients(useHost);
@@ -891,6 +573,9 @@ namespace Unity.Netcode.RuntimeTests
         }
 
         [Test]
+#if ENABLE_CORECLR
+        [Explicit("NGO multi-instance test sessions fail to start/connect or time out on CoreCLR, see https://jira.unity3d.com/browse/UUM-149591")]
+#endif
         public void TestNetworkVariableTemplateBehaviourStruct([Values] HostOrServer useHost)
         {
             InitializeServerAndClients(useHost);
@@ -909,6 +594,9 @@ namespace Unity.Netcode.RuntimeTests
         }
 
         [Test]
+#if ENABLE_CORECLR
+        [Explicit("NGO multi-instance test sessions fail to start/connect or time out on CoreCLR, see https://jira.unity3d.com/browse/UUM-149591")]
+#endif
         public void TestNetworkVariableEnum([Values] HostOrServer useHost)
         {
             InitializeServerAndClients(useHost);
@@ -926,6 +614,9 @@ namespace Unity.Netcode.RuntimeTests
         }
 
         [Test]
+#if ENABLE_CORECLR
+        [Explicit("NGO multi-instance test sessions fail to start/connect or time out on CoreCLR, see https://jira.unity3d.com/browse/UUM-149591")]
+#endif
         public void TestINetworkSerializableClassCallsNetworkSerialize([Values] HostOrServer useHost)
         {
             InitializeServerAndClients(useHost);
@@ -942,9 +633,11 @@ namespace Unity.Netcode.RuntimeTests
             // Wait for the client-side to notify it is finished initializing and spawning.
             Assert.True(WaitForConditionOrTimeOutWithTimeTravel(VerifyCallback));
         }
-#endif
 
         [Test]
+#if ENABLE_CORECLR
+        [Explicit("NGO multi-instance test sessions fail to start/connect or time out on CoreCLR, see https://jira.unity3d.com/browse/UUM-149591")]
+#endif
         public void TestINetworkSerializableStructCallsNetworkSerialize([Values] HostOrServer useHost)
         {
             InitializeServerAndClients(useHost);
@@ -959,6 +652,9 @@ namespace Unity.Netcode.RuntimeTests
         }
 
         [Test]
+#if ENABLE_CORECLR
+        [Explicit("NGO NetworkVariable serialization codegen not generated for some types on CoreCLR (falls back to FallbackSerializer), see https://jira.unity3d.com/browse/UUM-149592")]
+#endif
         public void TestCustomGenericSerialization()
         {
             // Just verifies that the ILPP codegen initialized these values for this type.
@@ -1012,6 +708,9 @@ namespace Unity.Netcode.RuntimeTests
         }
 
         [Test]
+#if ENABLE_CORECLR
+        [Explicit("NGO NetworkVariable serialization codegen not generated for some types on CoreCLR (falls back to FallbackSerializer), see https://jira.unity3d.com/browse/UUM-149592")]
+#endif
         public void TestUnsupportedManagedTypesWithUserSerializationDoNotThrowExceptions()
         {
             var variable = new NetworkVariable<string>();
@@ -1067,6 +766,9 @@ namespace Unity.Netcode.RuntimeTests
         }
 
         [Test]
+#if ENABLE_CORECLR
+        [Explicit("NGO NetworkVariable serialization codegen not generated for some types on CoreCLR (falls back to FallbackSerializer), see https://jira.unity3d.com/browse/UUM-149592")]
+#endif
         public void TestTypesReferencedInSubclassSerializeSuccessfully()
         {
             var variable = new NetworkVariableSubclass<TemplatedValueOnlyReferencedByNetworkVariableSubclass<int>>();
@@ -1082,6 +784,9 @@ namespace Unity.Netcode.RuntimeTests
         }
 
         [Test]
+#if ENABLE_CORECLR
+        [Explicit("NGO NetworkVariable serialization codegen not generated for some types on CoreCLR (falls back to FallbackSerializer), see https://jira.unity3d.com/browse/UUM-149592")]
+#endif
         public void TestUnsupportedUnmanagedTypesWithUserSerializationDoNotThrowExceptions()
         {
             var variable = new NetworkVariable<Guid>();
@@ -1152,6 +857,58 @@ namespace Unity.Netcode.RuntimeTests
             Assert.AreSame(testComp.AllInts[2], testComp.Int2);
             Assert.AreSame(testComp.AllInts[3], testComp.Int3);
             Assert.AreSame(testComp.AllInts[4], testComp.Int4);
+        }
+
+        [Test]
+#if ENABLE_CORECLR
+        [Explicit("NGO multi-instance test sessions fail to start/connect or time out on CoreCLR, see https://jira.unity3d.com/browse/UUM-149591")]
+#endif
+        public void TestNetworkVariableChangeAndReturnInSameFrame([Values] HostOrServer useHost)
+        {
+            InitializeServerAndClients(useHost);
+
+            var serverOnValueChangedCount = 0;
+            var clientOnValueChangedCount = 0;
+
+            void ServerOnValueChanged(NetworkVariableTest.SomeEnum previous, NetworkVariableTest.SomeEnum next)
+            {
+                serverOnValueChangedCount++;
+            }
+
+            void ClientOnValueChanged(NetworkVariableTest.SomeEnum previous, NetworkVariableTest.SomeEnum next)
+            {
+                clientOnValueChangedCount++;
+            }
+
+            bool VerifyStructure()
+            {
+                return m_Player1OnClient1.TheEnum.Value == m_Player1OnServer.TheEnum.Value;
+            }
+
+            // Wait for the client-side to notify it is finished initializing and spawning.
+            Assert.True(WaitForConditionOrTimeOutWithTimeTravel(VerifyStructure));
+
+            m_Player1OnServer.TheEnum.OnValueChanged += ServerOnValueChanged;
+            m_Player1OnClient1.TheEnum.OnValueChanged += ClientOnValueChanged;
+
+            // Change the value once in a frame
+            m_Player1OnServer.TheEnum.Value = NetworkVariableTest.SomeEnum.B;
+
+            // Wait for the value to sync and assert that both server and client had OnValueChanged called an equal number of times
+            Assert.True(WaitForConditionOrTimeOutWithTimeTravel(VerifyStructure), "Timed out waiting for client and server values to match");
+            Assert.AreEqual(serverOnValueChangedCount, clientOnValueChangedCount, $"Expected OnValueChanged call count to be equal. Server OnValueChanged was called {serverOnValueChangedCount} times but client was called {clientOnValueChangedCount} times!");
+
+            // Change the value twice in a frame
+            m_Player1OnServer.TheEnum.Value = NetworkVariableTest.SomeEnum.A;
+            m_Player1OnServer.TheEnum.Value = NetworkVariableTest.SomeEnum.B;
+
+            // Wait for the value to sync and assert that the server had OnValueChanged called once more than the client
+            TimeTravelAdvanceTick();
+            Assert.True(WaitForConditionOrTimeOutWithTimeTravel(VerifyStructure), "Timed out waiting for client and server values to match");
+            Assert.AreEqual(serverOnValueChangedCount - 1, clientOnValueChangedCount, $"Unexpected OnValueChanged call count. Server OnValueChanged was called {serverOnValueChangedCount} times but client was called {clientOnValueChangedCount} times!");
+
+            m_Player1OnServer.TheEnum.OnValueChanged -= ServerOnValueChanged;
+            m_Player1OnClient1.TheEnum.OnValueChanged -= ClientOnValueChanged;
         }
 
         private void TestValueType<T>(T testValue, T changedValue) where T : unmanaged
@@ -1663,13 +1420,16 @@ namespace Unity.Netcode.RuntimeTests
         }
 #endif
         [Test]
+#if ENABLE_CORECLR
+        [Explicit("NGO NetworkVariable serialization codegen not generated for some types on CoreCLR (falls back to FallbackSerializer), see https://jira.unity3d.com/browse/UUM-149592")]
+#endif
         public void WhenSerializingAndDeserializingValueTypeNetworkVariables_ValuesAreSerializedCorrectly(
 
             [Values(typeof(byte), typeof(sbyte), typeof(short), typeof(ushort), typeof(int), typeof(uint),
                 typeof(long), typeof(ulong), typeof(bool), typeof(char), typeof(float), typeof(double),
                 typeof(ByteEnum), typeof(SByteEnum), typeof(ShortEnum), typeof(UShortEnum), typeof(IntEnum),
                 typeof(UIntEnum), typeof(LongEnum), typeof(ULongEnum), typeof(Vector2), typeof(Vector3),
-                typeof(Vector2Int), typeof(Vector3Int), typeof(Vector4), typeof(Quaternion), typeof(Color),
+                typeof(Vector2Int), typeof(Vector3Int), typeof(Vector4), typeof(Quaternion), typeof(Pose), typeof(Color),
                 typeof(Color32), typeof(Ray), typeof(Ray2D), typeof(NetworkVariableTestStruct), typeof(FixedString32Bytes))]
             Type testType)
         {
@@ -1789,6 +1549,12 @@ namespace Unity.Netcode.RuntimeTests
                     new Quaternion(5, 10, 15, 20),
                     new Quaternion(25, 30, 35, 40));
             }
+            else if (testType == typeof(Pose))
+            {
+                TestValueType(
+                    new Pose(new Vector3(5, 10, 15), new Quaternion(20, 25, 30, 35)),
+                    new Pose(new Vector3(40, 45, 50), new Quaternion(55, 60, 65, 70)));
+            }
             else if (testType == typeof(Color))
             {
                 TestValueType(
@@ -1824,13 +1590,16 @@ namespace Unity.Netcode.RuntimeTests
         }
 
         [Test]
+#if ENABLE_CORECLR
+        [Explicit("NGO NetworkVariable serialization codegen not generated for some types on CoreCLR (falls back to FallbackSerializer), see https://jira.unity3d.com/browse/UUM-149592")]
+#endif
         public void WhenSerializingAndDeserializingValueTypeNativeArrayNetworkVariables_ValuesAreSerializedCorrectly(
 
             [Values(typeof(byte), typeof(sbyte), typeof(short), typeof(ushort), typeof(int), typeof(uint),
                 typeof(long), typeof(ulong), typeof(bool), typeof(char), typeof(float), typeof(double),
                 typeof(ByteEnum), typeof(SByteEnum), typeof(ShortEnum), typeof(UShortEnum), typeof(IntEnum),
                 typeof(UIntEnum), typeof(LongEnum), typeof(ULongEnum), typeof(Vector2), typeof(Vector3),
-                typeof(Vector2Int), typeof(Vector3Int), typeof(Vector4), typeof(Quaternion), typeof(Color),
+                typeof(Vector2Int), typeof(Vector3Int), typeof(Vector4), typeof(Quaternion), typeof(Pose), typeof(Color),
                 typeof(Color32), typeof(Ray), typeof(Ray2D), typeof(NetworkVariableTestStruct), typeof(FixedString32Bytes))]
             Type testType)
         {
@@ -1990,6 +1759,12 @@ namespace Unity.Netcode.RuntimeTests
                     new NativeArray<Quaternion>(new Quaternion[] { new Quaternion(5, 10, 15, 20), new Quaternion(25, 30, 35, 40) }, Allocator.Temp),
                     new NativeArray<Quaternion>(new Quaternion[] { new Quaternion(45, 50, 55, 60), new Quaternion(65, 70, 75, 80), new Quaternion(85, 90, 95, 100) }, Allocator.Temp));
             }
+            else if (testType == typeof(Pose))
+            {
+                TestValueTypeNativeArray(
+                    new NativeArray<Pose>(new Pose[] { new Pose(new Vector3(5, 10, 15), new Quaternion(20, 25, 30, 35)), new Pose(new Vector3(40, 45, 50), new Quaternion(55, 60, 65, 70)) }, Allocator.Temp),
+                    new NativeArray<Pose>(new Pose[] { new Pose(new Vector3(75, 80, 85), new Quaternion(90, 95, 100, 105)), new Pose(new Vector3(110, 115, 120), new Quaternion(125, 130, 135, 140)), new Pose(new Vector3(145, 150, 155), new Quaternion(160, 165, 170, 175)) }, Allocator.Temp));
+            }
             else if (testType == typeof(Color))
             {
                 TestValueTypeNativeArray(
@@ -2068,7 +1843,7 @@ namespace Unity.Netcode.RuntimeTests
 
         public unsafe T RandGenBytes<T>(System.Random rand) where T : unmanaged
         {
-            var t = new T();
+            var t = default(T);
             T* tPtr = &t;
             var s = new Span<byte>(tPtr, sizeof(T));
             rand.NextBytes(s);
@@ -2161,12 +1936,15 @@ namespace Unity.Netcode.RuntimeTests
         [Test]
         [UnityPlatform(exclude = new[] { RuntimePlatform.Android, RuntimePlatform.IPhonePlayer })] // Ignored test tracked in MTT-11343
         [Repeat(5)]
+#if ENABLE_CORECLR
+        [Explicit("NGO NetworkVariable serialization codegen not generated for some types on CoreCLR (falls back to FallbackSerializer), see https://jira.unity3d.com/browse/UUM-149592")]
+#endif
         public void WhenSerializingAndDeserializingVeryLargeValueTypeNativeArrayNetworkVariables_ValuesAreSerializedCorrectly(
 
             [Values(typeof(byte), typeof(sbyte), typeof(short), typeof(ushort), typeof(int), typeof(uint),
                 typeof(long), typeof(ulong), typeof(bool), typeof(char), typeof(float), typeof(double),
                 typeof(Vector2), typeof(Vector3), typeof(Vector2Int), typeof(Vector3Int), typeof(Vector4),
-                typeof(Quaternion), typeof(Color), typeof(Color32), typeof(Ray), typeof(Ray2D),
+                typeof(Quaternion), typeof(Pose), typeof(Color), typeof(Color32), typeof(Ray), typeof(Ray2D),
                 typeof(NetworkVariableTestStruct), typeof(FixedString32Bytes))]
             Type testType)
         {
@@ -2286,6 +2064,14 @@ namespace Unity.Netcode.RuntimeTests
             {
                 (var original, var original2, var changed, var changed2) = GetArarys(
                     (rand) => new Quaternion((float)rand.NextDouble(), (float)rand.NextDouble(), (float)rand.NextDouble(), (float)rand.NextDouble())
+                );
+                TestValueTypeNativeArray(original, changed);
+                TestValueTypeNativeArray(original2, changed2);
+            }
+            else if (testType == typeof(Pose))
+            {
+                (var original, var original2, var changed, var changed2) = GetArarys(
+                    (rand) => new Pose(new Vector3((float)rand.NextDouble(), (float)rand.NextDouble(), (float)rand.NextDouble()), new Quaternion((float)rand.NextDouble(), (float)rand.NextDouble(), (float)rand.NextDouble(), (float)rand.NextDouble()))
                 );
                 TestValueTypeNativeArray(original, changed);
                 TestValueTypeNativeArray(original2, changed2);
@@ -2615,12 +2401,15 @@ namespace Unity.Netcode.RuntimeTests
         [Test]
         [UnityPlatform(exclude = new[] { RuntimePlatform.Android, RuntimePlatform.IPhonePlayer })] // Ignored test tracked in MTT-11343
         [Repeat(5)]
+#if ENABLE_CORECLR
+        [Explicit("NGO NetworkVariable serialization codegen not generated for some types on CoreCLR (falls back to FallbackSerializer), see https://jira.unity3d.com/browse/UUM-149592")]
+#endif
         public void WhenSerializingAndDeserializingVeryLargeListNetworkVariables_ValuesAreSerializedCorrectly(
 
             [Values(typeof(byte), typeof(sbyte), typeof(short), typeof(ushort), typeof(int), typeof(uint),
                 typeof(long), typeof(ulong), typeof(bool), typeof(char), typeof(float), typeof(double),
                 typeof(Vector2), typeof(Vector3), typeof(Vector2Int), typeof(Vector3Int), typeof(Vector4),
-                typeof(Quaternion), typeof(Color), typeof(Color32), typeof(Ray), typeof(Ray2D),
+                typeof(Quaternion), typeof(Pose), typeof(Color), typeof(Color32), typeof(Ray), typeof(Ray2D),
                 typeof(NetworkVariableTestClass), typeof(FixedString32Bytes))]
             Type testType)
         {
@@ -2744,6 +2533,14 @@ namespace Unity.Netcode.RuntimeTests
                 TestList(original, changed);
                 TestList(original2, changed2);
             }
+            else if (testType == typeof(Pose))
+            {
+                (var original, var original2, var changed, var changed2) = GetLists(
+                    (rand) => new Pose(new Vector3((float)rand.NextDouble(), (float)rand.NextDouble(), (float)rand.NextDouble()), new Quaternion((float)rand.NextDouble(), (float)rand.NextDouble(), (float)rand.NextDouble(), (float)rand.NextDouble()))
+                );
+                TestList(original, changed);
+                TestList(original2, changed2);
+            }
             else if (testType == typeof(Color))
             {
                 (var original, var original2, var changed, var changed2) = GetLists(
@@ -2802,12 +2599,15 @@ namespace Unity.Netcode.RuntimeTests
         [Test]
         [UnityPlatform(exclude = new[] { RuntimePlatform.Android, RuntimePlatform.IPhonePlayer })] // Ignored test tracked in MTT-11343
         [Repeat(5)]
+#if ENABLE_CORECLR
+        [Explicit("NGO NetworkVariable serialization codegen not generated for some types on CoreCLR (falls back to FallbackSerializer), see https://jira.unity3d.com/browse/UUM-149592")]
+#endif
         public void WhenSerializingAndDeserializingVeryLargeHashSetNetworkVariables_ValuesAreSerializedCorrectly(
 
             [Values(typeof(byte), typeof(sbyte), typeof(short), typeof(ushort), typeof(int), typeof(uint),
-                typeof(long), typeof(ulong), typeof(bool), typeof(char), typeof(float), typeof(double),
+                typeof(long), typeof(ulong), typeof(char), typeof(float), typeof(double),
                 typeof(Vector2), typeof(Vector3), typeof(Vector2Int), typeof(Vector3Int), typeof(Vector4),
-                typeof(Quaternion), typeof(HashableNetworkVariableTestClass), typeof(FixedString32Bytes))]
+                typeof(Quaternion), typeof(Pose), typeof(HashableNetworkVariableTestClass), typeof(FixedString32Bytes))]
             Type testType)
         {
             if (testType == typeof(byte))
@@ -2930,6 +2730,14 @@ namespace Unity.Netcode.RuntimeTests
                 TestHashSet(original, changed);
                 TestHashSet(original2, changed2);
             }
+            else if (testType == typeof(Pose))
+            {
+                (var original, var original2, var changed, var changed2) = GetHashSets(
+                    (rand) => new Pose(new Vector3((float)rand.NextDouble(), (float)rand.NextDouble(), (float)rand.NextDouble()), new Quaternion((float)rand.NextDouble(), (float)rand.NextDouble(), (float)rand.NextDouble(), (float)rand.NextDouble()))
+                );
+                TestHashSet(original, changed);
+                TestHashSet(original2, changed2);
+            }
             else if (testType == typeof(Color))
             {
                 (var original, var original2, var changed, var changed2) = GetHashSets(
@@ -2958,13 +2766,16 @@ namespace Unity.Netcode.RuntimeTests
         [Test]
         [UnityPlatform(exclude = new[] { RuntimePlatform.Android, RuntimePlatform.IPhonePlayer })] // Ignored test tracked in MTT-11343
         [Repeat(5)]
+#if ENABLE_CORECLR
+        [Explicit("NGO NetworkVariable serialization codegen not generated for some types on CoreCLR (falls back to FallbackSerializer), see https://jira.unity3d.com/browse/UUM-149592")]
+#endif
         public void WhenSerializingAndDeserializingVeryLargeDictionaryNetworkVariables_ValuesAreSerializedCorrectly(
 
             [Values(typeof(byte), typeof(ulong), typeof(Vector2), typeof(HashMapKeyClass))] Type keyType,
             [Values(typeof(byte), typeof(sbyte), typeof(short), typeof(ushort), typeof(int), typeof(uint),
                 typeof(long), typeof(ulong), typeof(bool), typeof(char), typeof(float), typeof(double),
                 typeof(Vector2), typeof(Vector3), typeof(Vector2Int), typeof(Vector3Int), typeof(Vector4),
-                typeof(Quaternion), typeof(HashMapValClass), typeof(FixedString32Bytes))]
+                typeof(Quaternion), typeof(Pose), typeof(HashMapValClass), typeof(FixedString32Bytes))]
             Type valType)
         {
             if (valType == typeof(byte))
@@ -3489,6 +3300,35 @@ namespace Unity.Netcode.RuntimeTests
                     TestDictionary(original2, changed2);
                 }
             }
+            else if (valType == typeof(Pose))
+            {
+                if (keyType == typeof(byte))
+                {
+                    (var original, var original2, var changed, var changed2) = GetDictionaries(RandGenBytes<byte>, (rand) => new Pose(new Vector3((float)rand.NextDouble(), (float)rand.NextDouble(), (float)rand.NextDouble()), new Quaternion((float)rand.NextDouble(), (float)rand.NextDouble(), (float)rand.NextDouble(), (float)rand.NextDouble())));
+                    TestDictionary(original, changed);
+                    TestDictionary(original2, changed2);
+
+                }
+                else if (keyType == typeof(ulong))
+                {
+                    (var original, var original2, var changed, var changed2) = GetDictionaries(RandGenBytes<ulong>, (rand) => new Pose(new Vector3((float)rand.NextDouble(), (float)rand.NextDouble(), (float)rand.NextDouble()), new Quaternion((float)rand.NextDouble(), (float)rand.NextDouble(), (float)rand.NextDouble(), (float)rand.NextDouble())));
+                    TestDictionary(original, changed);
+                    TestDictionary(original2, changed2);
+                }
+                else if (keyType == typeof(Vector2))
+                {
+                    (var original, var original2, var changed, var changed2) = GetDictionaries((rand) => new Vector2((float)rand.NextDouble(), (float)rand.NextDouble()), (rand) => new Pose(new Vector3((float)rand.NextDouble(), (float)rand.NextDouble(), (float)rand.NextDouble()), new Quaternion((float)rand.NextDouble(), (float)rand.NextDouble(), (float)rand.NextDouble(), (float)rand.NextDouble())));
+                    TestDictionary(original, changed);
+                    TestDictionary(original2, changed2);
+
+                }
+                else if (keyType == typeof(HashMapKeyClass))
+                {
+                    (var original, var original2, var changed, var changed2) = GetDictionaries((rand) => new HashMapKeyClass { Data = RandGenBytes<HashMapKeyStruct>(rand) }, (rand) => new Quaternion((float)rand.NextDouble(), (float)rand.NextDouble(), (float)rand.NextDouble(), (float)rand.NextDouble()));
+                    TestDictionary(original, changed);
+                    TestDictionary(original2, changed2);
+                }
+            }
             else if (valType == typeof(HashMapValClass))
             {
                 if (keyType == typeof(byte))
@@ -3558,7 +3398,7 @@ namespace Unity.Netcode.RuntimeTests
                 typeof(long), typeof(ulong), typeof(bool), typeof(char), typeof(float), typeof(double),
                 typeof(ByteEnum), typeof(SByteEnum), typeof(ShortEnum), typeof(UShortEnum), typeof(IntEnum),
                 typeof(UIntEnum), typeof(LongEnum), typeof(ULongEnum), typeof(Vector2), typeof(Vector3),
-                typeof(Vector2Int), typeof(Vector3Int), typeof(Vector4), typeof(Quaternion), typeof(Color),
+                typeof(Vector2Int), typeof(Vector3Int), typeof(Vector4), typeof(Quaternion), typeof(Pose), typeof(Color),
                 typeof(Color32), typeof(Ray), typeof(Ray2D), typeof(NetworkVariableTestStruct), typeof(FixedString32Bytes))]
             Type testType)
         {
@@ -3717,6 +3557,12 @@ namespace Unity.Netcode.RuntimeTests
                 TestValueTypeNativeList(
                     new NativeList<Quaternion>(Allocator.Temp) { new Quaternion(5, 10, 15, 20), new Quaternion(25, 30, 35, 40) },
                     new NativeList<Quaternion>(Allocator.Temp) { new Quaternion(45, 50, 55, 60), new Quaternion(65, 70, 75, 80), new Quaternion(85, 90, 95, 100) });
+            }
+            else if (testType == typeof(Pose))
+            {
+                TestValueTypeNativeList(
+                    new NativeList<Pose>(Allocator.Temp) { new Pose(new Vector3(5, 10, 15), new Quaternion(20, 25, 30, 35)), new Pose(new Vector3(40, 45, 50), new Quaternion(55, 60, 65, 70)) },
+                    new NativeList<Pose>(Allocator.Temp) { new Pose(new Vector3(75, 80, 85), new Quaternion(90, 95, 100, 105)), new Pose(new Vector3(110, 115, 120), new Quaternion(125, 130, 135, 140)), new Pose(new Vector3(145, 150, 155), new Quaternion(160, 165, 170, 175)) });
             }
             else if (testType == typeof(Color))
             {
@@ -4070,7 +3916,7 @@ namespace Unity.Netcode.RuntimeTests
             [Values(typeof(byte), typeof(sbyte), typeof(short), typeof(ushort), typeof(int), typeof(uint),
                 typeof(long), typeof(ulong), typeof(bool), typeof(char), typeof(float), typeof(double),
                 typeof(Vector2), typeof(Vector3), typeof(Vector2Int), typeof(Vector3Int), typeof(Vector4),
-                typeof(Quaternion), typeof(Color), typeof(Color32), typeof(Ray), typeof(Ray2D),
+                typeof(Quaternion), typeof(Pose),typeof(Color), typeof(Color32), typeof(Ray), typeof(Ray2D),
                 typeof(NetworkVariableTestStruct), typeof(FixedString32Bytes))]
             Type testType)
         {
@@ -4194,6 +4040,14 @@ namespace Unity.Netcode.RuntimeTests
                 TestValueTypeNativeList(original, changed);
                 TestValueTypeNativeList(original2, changed2);
             }
+            else if (testType == typeof(Pose))
+            {
+                (var original, var original2, var changed, var changed2) = GetNativeLists(
+                    (rand) => new Pose(new Vector3((float)rand.NextDouble(), (float)rand.NextDouble(), (float)rand.NextDouble()), new Quaternion((float)rand.NextDouble(), (float)rand.NextDouble(), (float)rand.NextDouble(), (float)rand.NextDouble()))
+                );
+                TestValueTypeNativeList(original, changed);
+                TestValueTypeNativeList(original2, changed2);
+            }
             else if (testType == typeof(Color))
             {
                 (var original, var original2, var changed, var changed2) = GetNativeLists(
@@ -4253,7 +4107,7 @@ namespace Unity.Netcode.RuntimeTests
             [Values(typeof(byte), typeof(sbyte), typeof(short), typeof(ushort), typeof(int), typeof(uint),
                 typeof(long), typeof(ulong), typeof(bool), typeof(char), typeof(float), typeof(double),
                 typeof(Vector2), typeof(Vector3), typeof(Vector2Int), typeof(Vector3Int), typeof(Vector4),
-                typeof(Quaternion), typeof(HashableNetworkVariableTestStruct), typeof(FixedString32Bytes))]
+                typeof(Quaternion), typeof(Pose), typeof(HashableNetworkVariableTestStruct), typeof(FixedString32Bytes))]
             Type testType)
         {
             if (testType == typeof(byte))
@@ -4376,6 +4230,14 @@ namespace Unity.Netcode.RuntimeTests
                 TestValueTypeNativeHashSet(original, changed);
                 TestValueTypeNativeHashSet(original2, changed2);
             }
+            else if (testType == typeof(Pose))
+            {
+                (var original, var original2, var changed, var changed2) = GetNativeHashSets(
+                    (rand) => new Pose(new Vector3((float)rand.NextDouble(), (float)rand.NextDouble(), (float)rand.NextDouble()), new Quaternion((float)rand.NextDouble(), (float)rand.NextDouble(), (float)rand.NextDouble(), (float)rand.NextDouble()))
+                );
+                TestValueTypeNativeHashSet(original, changed);
+                TestValueTypeNativeHashSet(original2, changed2);
+            }
             else if (testType == typeof(Color))
             {
                 (var original, var original2, var changed, var changed2) = GetNativeHashSets(
@@ -4406,7 +4268,7 @@ namespace Unity.Netcode.RuntimeTests
             [Values(typeof(byte), typeof(sbyte), typeof(short), typeof(ushort), typeof(int), typeof(uint),
                 typeof(long), typeof(ulong), typeof(bool), typeof(char), typeof(float), typeof(double),
                 typeof(Vector2), typeof(Vector3), typeof(Vector2Int), typeof(Vector3Int), typeof(Vector4),
-                typeof(Quaternion), typeof(HashMapValStruct), typeof(FixedString32Bytes))]
+                typeof(Quaternion), typeof(Pose), typeof(HashMapValStruct), typeof(FixedString32Bytes))]
             Type valType)
         {
             if (valType == typeof(byte))
@@ -4931,6 +4793,35 @@ namespace Unity.Netcode.RuntimeTests
                     TestValueTypeNativeHashMap(original2, changed2);
                 }
             }
+            else if (valType == typeof(Pose))
+            {
+                if (keyType == typeof(byte))
+                {
+                    (var original, var original2, var changed, var changed2) = GetMaps(RandGenBytes<byte>, (rand) => new Pose(new Vector3((float)rand.NextDouble(), (float)rand.NextDouble(), (float)rand.NextDouble()), new Quaternion((float)rand.NextDouble(), (float)rand.NextDouble(), (float)rand.NextDouble(), (float)rand.NextDouble())));
+                    TestValueTypeNativeHashMap(original, changed);
+                    TestValueTypeNativeHashMap(original2, changed2);
+
+                }
+                else if (keyType == typeof(ulong))
+                {
+                    (var original, var original2, var changed, var changed2) = GetMaps(RandGenBytes<ulong>, (rand) => new Pose(new Vector3((float)rand.NextDouble(), (float)rand.NextDouble(), (float)rand.NextDouble()), new Quaternion((float)rand.NextDouble(), (float)rand.NextDouble(), (float)rand.NextDouble(), (float)rand.NextDouble())));
+                    TestValueTypeNativeHashMap(original, changed);
+                    TestValueTypeNativeHashMap(original2, changed2);
+                }
+                else if (keyType == typeof(Vector2))
+                {
+                    (var original, var original2, var changed, var changed2) = GetMaps((rand) => new Vector2((float)rand.NextDouble(), (float)rand.NextDouble()), (rand) => new Pose(new Vector3((float)rand.NextDouble(), (float)rand.NextDouble(), (float)rand.NextDouble()), new Quaternion((float)rand.NextDouble(), (float)rand.NextDouble(), (float)rand.NextDouble(), (float)rand.NextDouble())));
+                    TestValueTypeNativeHashMap(original, changed);
+                    TestValueTypeNativeHashMap(original2, changed2);
+
+                }
+                else if (keyType == typeof(HashMapKeyStruct))
+                {
+                    (var original, var original2, var changed, var changed2) = GetMaps(RandGenBytes<HashMapKeyStruct>, (rand) => new Pose(new Vector3((float)rand.NextDouble(), (float)rand.NextDouble(), (float)rand.NextDouble()), new Quaternion((float)rand.NextDouble(), (float)rand.NextDouble(), (float)rand.NextDouble(), (float)rand.NextDouble())));
+                    TestValueTypeNativeHashMap(original, changed);
+                    TestValueTypeNativeHashMap(original2, changed2);
+                }
+            }
             else if (valType == typeof(HashMapValStruct))
             {
                 if (keyType == typeof(byte))
@@ -4994,6 +4885,9 @@ namespace Unity.Netcode.RuntimeTests
 #endif
 
         [Test]
+#if ENABLE_CORECLR
+        [Explicit("NGO NetworkVariable serialization codegen not generated for some types on CoreCLR (falls back to FallbackSerializer), see https://jira.unity3d.com/browse/UUM-149592")]
+#endif
         public void TestManagedINetworkSerializableNetworkVariablesDeserializeInPlace()
         {
             var variable = new NetworkVariable<ManagedNetworkSerializableType>
@@ -5030,6 +4924,9 @@ namespace Unity.Netcode.RuntimeTests
         }
 
         [Test]
+#if ENABLE_CORECLR
+        [Explicit("NGO NetworkVariable serialization codegen not generated for some types on CoreCLR (falls back to FallbackSerializer), see https://jira.unity3d.com/browse/UUM-149592")]
+#endif
         public void TestUnmnagedINetworkSerializableNetworkVariablesDeserializeInPlace()
         {
             var variable = new NetworkVariable<UnmanagedNetworkSerializableType>
@@ -5072,7 +4969,6 @@ namespace Unity.Netcode.RuntimeTests
         {
             Time.timeScale = m_OriginalTimeScale;
 
-            m_NetworkListPredicateHandler = null;
             yield return base.OnTearDown();
         }
     }

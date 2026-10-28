@@ -15,7 +15,7 @@ namespace Unity.Netcode
         /// The update method that is being executed in the context of related <see cref="NetworkUpdateStage"/>.
         /// </summary>
         /// <param name="updateStage">The <see cref="NetworkUpdateStage"/> that is being executed.</param>
-        void NetworkUpdate(NetworkUpdateStage updateStage);
+        public void NetworkUpdate(NetworkUpdateStage updateStage);
     }
 
     /// <summary>
@@ -71,9 +71,9 @@ namespace Unity.Netcode
     /// </summary>
     public static class NetworkUpdateLoop
     {
-        private static Dictionary<NetworkUpdateStage, HashSet<INetworkUpdateSystem>> s_UpdateSystem_Sets;
-        private static Dictionary<NetworkUpdateStage, INetworkUpdateSystem[]> s_UpdateSystem_Arrays;
-        private const int k_UpdateSystem_InitialArrayCapacity = 1024;
+        private static Dictionary<NetworkUpdateStage, HashSet<INetworkUpdateSystem>> s_UpdateSystemSets;
+        private static Dictionary<NetworkUpdateStage, INetworkUpdateSystem[]> s_UpdateSystemArrays;
+        private const int k_UpdateSystemInitialArrayCapacity = 1024;
 
         private static NetworkUpdateStage[] _CACHED_ENUM = null;
 
@@ -89,13 +89,13 @@ namespace Unity.Netcode
 
         static NetworkUpdateLoop()
         {
-            s_UpdateSystem_Sets = new Dictionary<NetworkUpdateStage, HashSet<INetworkUpdateSystem>>();
-            s_UpdateSystem_Arrays = new Dictionary<NetworkUpdateStage, INetworkUpdateSystem[]>();
+            s_UpdateSystemSets = new Dictionary<NetworkUpdateStage, HashSet<INetworkUpdateSystem>>();
+            s_UpdateSystemArrays = new Dictionary<NetworkUpdateStage, INetworkUpdateSystem[]>();
 
             foreach (NetworkUpdateStage updateStage in GetNetworkUpdateStageEnumValues())
             {
-                s_UpdateSystem_Sets.Add(updateStage, new HashSet<INetworkUpdateSystem>());
-                s_UpdateSystem_Arrays.Add(updateStage, new INetworkUpdateSystem[k_UpdateSystem_InitialArrayCapacity]);
+                s_UpdateSystemSets.Add(updateStage, new HashSet<INetworkUpdateSystem>());
+                s_UpdateSystemArrays.Add(updateStage, new INetworkUpdateSystem[k_UpdateSystemInitialArrayCapacity]);
             }
         }
 
@@ -118,19 +118,19 @@ namespace Unity.Netcode
         /// <param name="updateStage">The <see cref="NetworkUpdateStage"/> being registered for the <see cref="INetworkUpdateSystem"/> implementation</param>
         public static void RegisterNetworkUpdate(this INetworkUpdateSystem updateSystem, NetworkUpdateStage updateStage = NetworkUpdateStage.Update)
         {
-            var sysSet = s_UpdateSystem_Sets[updateStage];
+            var sysSet = s_UpdateSystemSets[updateStage];
             if (!sysSet.Contains(updateSystem))
             {
                 sysSet.Add(updateSystem);
 
                 int setLen = sysSet.Count;
-                var sysArr = s_UpdateSystem_Arrays[updateStage];
+                var sysArr = s_UpdateSystemArrays[updateStage];
                 int arrLen = sysArr.Length;
 
                 if (setLen > arrLen)
                 {
                     // double capacity
-                    sysArr = s_UpdateSystem_Arrays[updateStage] = new INetworkUpdateSystem[arrLen *= 2];
+                    sysArr = s_UpdateSystemArrays[updateStage] = new INetworkUpdateSystem[arrLen *= 2];
                 }
 
                 sysSet.CopyTo(sysArr);
@@ -162,13 +162,13 @@ namespace Unity.Netcode
         /// <param name="updateStage">The <see cref="NetworkUpdateStage"/> to be deregistered from the <see cref="INetworkUpdateSystem"/> implementation</param>
         public static void UnregisterNetworkUpdate(this INetworkUpdateSystem updateSystem, NetworkUpdateStage updateStage = NetworkUpdateStage.Update)
         {
-            var sysSet = s_UpdateSystem_Sets[updateStage];
+            var sysSet = s_UpdateSystemSets[updateStage];
             if (sysSet.Contains(updateSystem))
             {
                 sysSet.Remove(updateSystem);
 
                 int setLen = sysSet.Count;
-                var sysArr = s_UpdateSystem_Arrays[updateStage];
+                var sysArr = s_UpdateSystemArrays[updateStage];
                 int arrLen = sysArr.Length;
 
                 sysSet.CopyTo(sysArr);
@@ -190,7 +190,7 @@ namespace Unity.Netcode
         {
             UpdateStage = updateStage;
 
-            var sysArr = s_UpdateSystem_Arrays[updateStage];
+            var sysArr = s_UpdateSystemArrays[updateStage];
             int arrLen = sysArr.Length;
             for (int curIdx = 0; curIdx < arrLen; curIdx++)
             {
@@ -304,6 +304,17 @@ namespace Unity.Netcode
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
         private static void Initialize()
         {
+#if UNITY_EDITOR
+            // Reset statics
+            s_UpdateSystemSets = new Dictionary<NetworkUpdateStage, HashSet<INetworkUpdateSystem>>();
+            s_UpdateSystemArrays = new Dictionary<NetworkUpdateStage, INetworkUpdateSystem[]>();
+            foreach (NetworkUpdateStage updateStage in Enum.GetValues(typeof(NetworkUpdateStage)))
+            {
+                s_UpdateSystemSets.Add(updateStage, new HashSet<INetworkUpdateSystem>());
+                s_UpdateSystemArrays.Add(updateStage, new INetworkUpdateSystem[k_UpdateSystemInitialArrayCapacity]);
+            }
+            UpdateStage = default;
+#endif
             UnregisterLoopSystems();
             RegisterLoopSystems();
         }
