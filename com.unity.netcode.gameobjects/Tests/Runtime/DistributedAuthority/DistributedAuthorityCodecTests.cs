@@ -458,9 +458,9 @@ namespace Unity.Netcode.RuntimeTests
                 ClientSynchronizationMode = LoadSceneMode.Single,
                 SceneAsset = "SomeRandomSceneName",
                 SceneHandle = new NetworkSceneHandle(23456, true),
-                ScenesToSynchronize = new Queue<uint>()
+                ScenesToSynchronize = new Queue<string>()
             };
-            eventData.ScenesToSynchronize.Enqueue(101);
+            eventData.ScenesToSynchronize.Enqueue("SomeOtherSceneName");
             eventData.SceneHandlesToSynchronize = new Queue<NetworkSceneHandle>();
             eventData.SceneHandlesToSynchronize.Enqueue(new NetworkSceneHandle(202, true));
 
