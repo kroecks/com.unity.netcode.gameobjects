@@ -325,7 +325,10 @@ namespace Unity.Netcode
         /// </remarks>
         private void CheckForInScenePlaced()
         {
-            if (gameObject.scene.IsValid() && gameObject.scene.buildIndex >= 0)
+            // Addressables fork: scenes do not have to be in the build list (they are loaded by addressable key),
+            // so any NetworkObject living in a real (non-preview, non-prefab-stage) scene counts as in-scene placed.
+            var scene = gameObject.scene;
+            if (scene.IsValid() && !EditorSceneManager.IsPreviewScene(scene) && PrefabStageUtility.GetPrefabStage(gameObject) == null)
             {
                 if (PrefabUtility.IsPartOfAnyPrefab(this))
                 {
@@ -354,6 +357,17 @@ namespace Unity.Netcode
                 // Set our disabled in-scene placed flag for spawning initially disabled in-scene placed objects.
                 m_InScenePlacedDisabledByDefault = !gameObject.activeInHierarchy;
             }
+        }
+
+        /// <summary>
+        /// Editor only: re-runs the in-scene placed detection. Returns true if <see cref="InScenePlaced"/> changed.
+        /// Used by the "Mark In-Scene NetworkObjects" menu tool to update scenes saved before 2.13.
+        /// </summary>
+        internal bool EditorRefreshInScenePlaced()
+        {
+            var before = InScenePlaced;
+            CheckForInScenePlaced();
+            return InScenePlaced != before;
         }
 #endif // UNITY_EDITOR
 
