@@ -300,38 +300,57 @@ namespace Unity.Netcode
             m_AsyncOperation = asyncOperation;
             m_AsyncOperation.Completed += new Action<AsyncOperationHandle<SceneInstance>>(asyncOp2 =>
             {
-                // Don't invoke the callback if the network session is disconnected
-                // during a SceneEventProgress
-                if (asyncOp2.Status == AsyncOperationStatus.Succeeded)
+                try
                 {
-                    var sceneInstance = asyncOp2.Result;
-                    if (!sceneInstance.Scene.isLoaded)
+                    if (asyncOp2.Status == AsyncOperationStatus.Succeeded)
                     {
-                        var asyncLoad = sceneInstance.ActivateAsync();
-                        asyncLoad.completed += operation =>
+                        var sceneInstance = asyncOp2.Result;
+                        var scene = sceneInstance.Scene;
+
+                        // Only a load that was started with activateOnLoad = false needs activating: the scene is
+                        // valid but not loaded yet. Unload results, and placeholder handles created with
+                        // default(SceneInstance) (e.g. ResourceManager.CreateCompletedOperation), have no scene to
+                        // activate - calling ActivateAsync() on those throws a NullReferenceException inside Addressables.
+                        AsyncOperation activation = null;
+                        if (scene.IsValid() && !scene.isLoaded)
                         {
-                            if (IsNetworkSessionActive())
+                            try
                             {
-                                OnSceneEventCompleted?.Invoke(SceneEventId, asyncOp2.Result.Scene.name);
+                                activation = sceneInstance.ActivateAsync();
                             }
-                        };
+                            catch (NullReferenceException)
+                            {
+                                Log.Warning(() => $"SceneInstance for '{scene.name}' has no load operation to activate; treating it as complete.");
+                            }
+                        }
+
+                        if (activation != null)
+                        {
+                            activation.completed += operation =>
+                            {
+                                // Don't invoke the callback if the network session is disconnected during a SceneEventProgress
+                                if (IsNetworkSessionActive())
+                                {
+                                    OnSceneEventCompleted?.Invoke(SceneEventId, asyncOp2.Result.Scene.name);
+                                }
+                            };
+                        }
+                        else if (IsNetworkSessionActive())
+                        {
+                            OnSceneEventCompleted?.Invoke(SceneEventId, scene.name);
+                        }
                     }
                     else
                     {
-                        if (IsNetworkSessionActive())
-                        {
-                            OnSceneEventCompleted?.Invoke(SceneEventId, asyncOp2.Result.Scene.name);
-                        }
+                        Debug.LogError($"Failed to load async scene: {asyncOp2.OperationException}");
                     }
                 }
-                else
+                finally
                 {
-                    Debug.LogError($"Failed to load async scene: {asyncOp2.OperationException}");
+                    // Go ahead and try finishing even if the network session is terminated/terminating
+                    // (or the callback above threw) as we might need to stop the coroutine
+                    TryFinishingSceneEventProgress();
                 }
-
-                // Go ahead and try finishing even if the network session is terminated/terminating
-                // as we might need to stop the coroutine
-                TryFinishingSceneEventProgress();
             });
         }
 
