@@ -1586,6 +1586,39 @@ namespace Unity.Netcode
             }
         }
 
+        /// <summary>
+        /// Addressables fork, legacy compatibility (pre-2.13 behaviour):
+        /// NGO 2.13 only treats a NetworkObject as in-scene placed if the InScenePlaced flag was serialized into the scene.
+        /// Older versions treated any never-spawned NetworkObject as a scene object, and projects (e.g. objects created
+        /// at runtime on every peer, or scenes in stale Addressables bundles) rely on that. If the object has never been
+        /// spawned, has a valid GlobalObjectIdHash and is not a registered network prefab (or the prefab asset itself),
+        /// mark it as in-scene placed so it is spawned and soft-synchronized like it used to be.
+        /// </summary>
+        /// <returns>true if the object is (now) considered in-scene placed</returns>
+        internal bool TryApplyLegacyInScenePlaced(NetworkObject networkObject)
+        {
+            if (networkObject.InScenePlaced)
+            {
+                return true;
+            }
+
+            if (networkObject.IsSpawned || networkObject.HasBeenSpawned || networkObject.GlobalObjectIdHash == 0)
+            {
+                return false;
+            }
+
+            var prefabs = NetworkManager.NetworkConfig.Prefabs;
+            if (prefabs.IsBasedOnRegisteredPrefab(networkObject) || prefabs.IsActualPrefabAsset(networkObject))
+            {
+                return false;
+            }
+
+            networkObject.InScenePlaced = true;
+            Log.Warning(() => $"[Legacy InScenePlaced] Treating '{networkObject.gameObject.NetworkGetScenePath()}' (hash={networkObject.GlobalObjectIdHash}) as in-scene placed. " +
+                              "Its InScenePlaced flag is not serialized; re-save the scene (Tools/Netcode/Mark In-Scene NetworkObjects) if it lives in a scene file.");
+            return true;
+        }
+
         internal void ServerSpawnSceneObjectsOnStartSweep()
         {
             var networkObjects = FindObjects.ByType<NetworkObject>(orderByIdentifier: true);
@@ -1621,6 +1654,12 @@ namespace Unity.Netcode
                 else if (networkObject.InScenePlaced && !networkObject.InScenePlacedPostProcessorMarkedDuringRuntime)
                 {
                     // If this was marked as in-scene placed within the editor, then it is valid.
+                    isValidInstanceToSpawn = true;
+                }
+
+                // Addressables fork: restore the pre-2.13 rule for never-spawned, unregistered NetworkObjects
+                if (!isValidInstanceToSpawn && !networkObject.InScenePlaced && TryApplyLegacyInScenePlaced(networkObject))
+                {
                     isValidInstanceToSpawn = true;
                 }
 

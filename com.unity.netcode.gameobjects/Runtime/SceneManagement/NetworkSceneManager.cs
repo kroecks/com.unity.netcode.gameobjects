@@ -2871,7 +2871,8 @@ namespace Unity.Netcode
             // at the end of scene loading we use this list to soft synchronize all in-scene placed NetworkObjects
             foreach (var networkObjectInstance in FindObjects.FromSceneByType<NetworkObject>(sceneToFilterBy, true))
             {
-                if (!networkObjectInstance.InScenePlaced)
+                // Addressables fork: legacy (pre-2.13) in-scene detection so server and clients agree on unserialized objects
+                if (!networkObjectInstance.InScenePlaced && !NetworkManager.SpawnManager.TryApplyLegacyInScenePlaced(networkObjectInstance))
                 {
                     continue;
                 }
